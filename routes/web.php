@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\KsefCertificateController;
 use App\Http\Controllers\KsefController;
 use Illuminate\Support\Facades\Route;
 use Laravel\Fortify\Features;
@@ -8,7 +9,12 @@ Route::inertia('/', 'welcome', [
     'canRegister' => Features::enabled(Features::registration()),
 ])->name('home');
 
-Route::middleware(['auth', 'verified'])->group(function () {
+Route::middleware(['auth'])->group(function () {
+    Route::get('ksef/setup', [KsefCertificateController::class, 'create'])->name('ksef.setup.create');
+    Route::post('ksef/setup', [KsefCertificateController::class, 'store'])->name('ksef.setup.store');
+});
+
+Route::middleware(['auth', 'verified', 'ksef.certificate'])->group(function () {
     Route::inertia('dashboard', 'dashboard')->name('dashboard');
 
     // KSeF routes

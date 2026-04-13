@@ -35,11 +35,19 @@ class HandleInertiaRequests extends Middleware
      */
     public function share(Request $request): array
     {
+        $user = $request->user();
+        $profile = $user?->ksefProfile()->with('offlineCertificate', 'onlineCertificate')->first();
+
         return [
             ...parent::share($request),
             'name' => config('app.name'),
             'auth' => [
-                'user' => $request->user(),
+                'user' => $user,
+                'ksef' => [
+                    'nip' => $profile?->nip,
+                    'hasOffline' => (bool) $profile?->offlineCertificate,
+                    'hasOnline' => (bool) $profile?->onlineCertificate,
+                ],
             ],
             'sidebarOpen' => ! $request->hasCookie('sidebar_state') || $request->cookie('sidebar_state') === 'true',
         ];

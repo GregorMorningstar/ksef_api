@@ -2,25 +2,24 @@
 
 namespace App\Services;
 
+use App\Models\KsefCertificate;
+use App\Models\KsefProfile;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class KsefService
 {
     private Client $client;
     private string $apiUrl;
-    private string $nip;
-    private string $ksefToken;
-    private string $authMethod;
+    private ?KsefProfile $profile = null;
 
     public function __construct()
     {
         $this->apiUrl = config('ksef.api_url');
-        $this->nip = config('ksef.nip');
-        $this->ksefToken = config('ksef.token', '');
-        $this->authMethod = config('ksef.auth_method', 'token');
 
         $this->client = new Client([
             'base_uri' => $this->apiUrl,
@@ -34,46 +33,47 @@ class KsefService
 
     /**
      * Authenticate using configured method (token or certificate).
+     * @param string $type 'offline' or 'online'
+     * @param string|null $keyPassword Password for private key
      */
-    public function authenticate(): array
+    public function authenticate(string $type = 'offline', ?string $keyPassword = null): array
     {
-        if ($this->authMethod === 'certificate') {
-            return $this->authenticateWithCertificate();
+        if ($this->getAuthMethod() === 'certificate') {
+            if ($keyPassword === null || $keyPassword === '') {
+                throw new \RuntimeException('Hasło do klucza prywatnego jest wymagane przy każdym połączeniu z KSeF.');
+            }
+
+            // Cache the password for this session (30 minutes)
+            session()->put('ksef_password_' . $type, $keyPassword);
+
+            return $this->authenticateWithCertificate($type, $keyPassword);
         }
 
-        return $this->authenticateWithToken();
-    }
-
-    /**
-     * Full authentication flow using KSeF token.
-     */
-    private function authenticateWithToken(): array
-    {
-        $challenge = $this->getChallenge();
-        $publicKey = $this->getPublicKey();
-
-        $tokenPayload = $this->ksefToken . '|' . $challenge['timestampMs'];
-        $encryptedToken = $this->encryptWithPublicKey($tokenPayload, $publicKey);
-
-        $authResponse = $this->startTokenAuth($challenge['challenge'], $encryptedToken);
-
-        return $this->completeAuth($authResponse);
+        throw new \RuntimeException('Ta aplikacja wymaga uwierzytelniania do KSeF przy użyciu certyfikatu użytkownika.');
     }
 
     /**
      * Full authentication flow using XAdES certificate signature.
      * Flow: challenge → build XML → sign XAdES → POST /auth/xades-signature → poll → redeem
      */
-    private function authenticateWithCertificate(): array
+    private function authenticateWithCertificate(string $type, string $keyPassword): array
     {
+        $profile = $this->getProfile();
+        $certificate = $this->getCertificate($type);
+
         // 1. Get challenge
         $challenge = $this->getChallenge();
 
         // 2. Build AuthTokenRequest XML
-        $xml = $this->buildAuthTokenRequestXml($challenge['challenge']);
+        $xml = $this->buildAuthTokenRequestXml($challenge['challenge'], $profile->nip);
 
         // 3. Sign XML with XAdES using certificate
-        $signedXml = $this->signXmlWithXades($xml);
+        $signedXml = $this->signXmlWithXades(
+            $xml,
+            Storage::disk('local')->path($certificate->cert_path),
+            Storage::disk('local')->path($certificate->key_path),
+            $keyPassword,
+        );
 
         Log::debug('KSeF XAdES signed XML', ['xml' => $signedXml]);
 
@@ -81,13 +81,13 @@ class KsefService
         $authResponse = $this->submitXadesAuth($signedXml);
 
         // 5. Poll + redeem
-        return $this->completeAuth($authResponse);
+        return $this->completeAuth($authResponse, $profile->id, $type);
     }
 
     /**
      * Complete authentication: poll status + redeem tokens.
      */
-    private function completeAuth(array $authResponse): array
+    private function completeAuth(array $authResponse, int $profileId, string $type): array
     {
         $referenceNumber = $authResponse['referenceNumber'];
         $authToken = $authResponse['authenticationToken']['token'];
@@ -99,8 +99,17 @@ class KsefService
         $accessToken = $tokens['accessToken']['token'];
         $refreshToken = $tokens['refreshToken']['token'];
 
-        Cache::put('ksef_access_token', $accessToken, now()->addMinutes(40));
-        Cache::put('ksef_refresh_token', $refreshToken, now()->addHours(23));
+        Cache::put($this->cacheKey($profileId, $type, 'access_token'), $accessToken, now()->addMinutes(30));
+        Cache::put($this->cacheKey($profileId, $type, 'refresh_token'), $refreshToken, now()->addHours(23));
+
+        $this->getProfile()->forceFill([
+            'connected_at' => now(),
+            'last_ksef_status' => [
+                'reference_number' => $referenceNumber,
+                'authenticated_at' => now()->toIso8601String(),
+                'type' => $type,
+            ],
+        ])->save();
 
         return $tokens;
     }
@@ -108,21 +117,22 @@ class KsefService
     /**
      * Get cached access token or re-authenticate.
      */
-    public function getAccessToken(): string
+    public function getAccessToken(string $type = 'offline'): string
     {
-        $token = Cache::get('ksef_access_token');
+        $profileId = $this->getProfile()->id;
+        $token = Cache::get($this->cacheKey($profileId, $type, 'access_token'));
 
         if ($token) {
             return $token;
         }
 
         // Try refresh
-        $refreshToken = Cache::get('ksef_refresh_token');
+        $refreshToken = Cache::get($this->cacheKey($profileId, $type, 'refresh_token'));
         if ($refreshToken) {
             try {
                 $result = $this->refreshAccessToken($refreshToken);
                 $newToken = $result['accessToken']['token'];
-                Cache::put('ksef_access_token', $newToken, now()->addMinutes(40));
+                Cache::put($this->cacheKey($profileId, $type, 'access_token'), $newToken, now()->addMinutes(30));
                 return $newToken;
             } catch (\Exception $e) {
                 Log::warning('KSeF token refresh failed, re-authenticating', ['error' => $e->getMessage()]);
@@ -130,8 +140,7 @@ class KsefService
         }
 
         // Full re-auth
-        $tokens = $this->authenticate();
-        return $tokens['accessToken']['token'];
+        throw new \RuntimeException('Sesja KSeF wygasła. Połącz ponownie, podając hasło do klucza prywatnego.');
     }
 
     // =============================================
@@ -162,56 +171,17 @@ class KsefService
     // TOKEN AUTH
     // =============================================
 
-    private function encryptWithPublicKey(string $data, string $publicKeyBase64): string
-    {
-        $derBytes = base64_decode($publicKeyBase64);
-
-        // Try loading as DER-encoded RSA public key
-        $pem = "-----BEGIN PUBLIC KEY-----\n" . chunk_split(base64_encode($derBytes), 64, "\n") . "-----END PUBLIC KEY-----\n";
-        $key = openssl_pkey_get_public($pem);
-
-        if ($key === false) {
-            // Try as certificate
-            $certPem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($derBytes), 64, "\n") . "-----END CERTIFICATE-----\n";
-            $key = openssl_pkey_get_public($certPem);
-        }
-
-        if ($key === false) {
-            throw new \RuntimeException('Failed to load MF public key: ' . openssl_error_string());
-        }
-
-        openssl_public_encrypt($data, $encrypted, $key, OPENSSL_PKCS1_OAEP_PADDING);
-
-        return base64_encode($encrypted);
-    }
-
-    private function startTokenAuth(string $challenge, string $encryptedToken): array
-    {
-        $response = $this->client->post('auth/ksef-token', [
-            'json' => [
-                'challenge' => $challenge,
-                'contextIdentifier' => [
-                    'type' => 'Nip',
-                    'value' => $this->nip,
-                ],
-                'encryptedToken' => $encryptedToken,
-            ],
-        ]);
-
-        return json_decode($response->getBody()->getContents(), true);
-    }
-
     // =============================================
     // CERTIFICATE / XAdES AUTH
     // =============================================
 
-    private function buildAuthTokenRequestXml(string $challenge): string
+    private function buildAuthTokenRequestXml(string $challenge, string $nip): string
     {
         $xml = '<?xml version="1.0" encoding="utf-8"?>' . "\n";
         $xml .= '<AuthTokenRequest xmlns="http://ksef.mf.gov.pl/auth/token/2.0">' . "\n";
         $xml .= '  <Challenge>' . htmlspecialchars($challenge, ENT_XML1, 'UTF-8') . '</Challenge>' . "\n";
         $xml .= '  <ContextIdentifier>' . "\n";
-        $xml .= '    <Nip>' . htmlspecialchars($this->nip, ENT_XML1, 'UTF-8') . '</Nip>' . "\n";
+        $xml .= '    <Nip>' . htmlspecialchars($nip, ENT_XML1, 'UTF-8') . '</Nip>' . "\n";
         $xml .= '  </ContextIdentifier>' . "\n";
         $xml .= '  <SubjectIdentifierType>certificateSubject</SubjectIdentifierType>' . "\n";
         $xml .= '</AuthTokenRequest>';
@@ -223,12 +193,8 @@ class KsefService
      * Sign XML with XAdES-BES enveloped signature.
      * Computes digests in full document context for correct namespace inheritance.
      */
-    private function signXmlWithXades(string $xml): string
+    private function signXmlWithXades(string $xml, string $certPath, string $keyPath, string $keyPassword): string
     {
-        $certPath = config('ksef.cert_path');
-        $keyPath = config('ksef.key_path');
-        $keyPassword = config('ksef.key_password', '');
-
         if (!file_exists($certPath) || !file_exists($keyPath)) {
             throw new \RuntimeException("Certificate files not found: {$certPath} or {$keyPath}");
         }
@@ -524,7 +490,8 @@ class KsefService
      */
     public function logout(): void
     {
-        $token = Cache::get('ksef_access_token');
+        $profileId = $this->getProfile()->id;
+        $token = Cache::get($this->cacheKey($profileId, 'access_token'));
         if (!$token) {
             return;
         }
@@ -537,8 +504,8 @@ class KsefService
             Log::warning('KSeF logout failed', ['error' => $e->getMessage()]);
         }
 
-        Cache::forget('ksef_access_token');
-        Cache::forget('ksef_refresh_token');
+        Cache::forget($this->cacheKey($profileId, 'access_token'));
+        Cache::forget($this->cacheKey($profileId, 'refresh_token'));
     }
 
     // =============================================
@@ -658,11 +625,13 @@ class KsefService
     }
 
     /**
-     * Check if we have a valid session.
+     * Check if we have a valid session (offline or online).
      */
     public function isAuthenticated(): bool
     {
-        return Cache::has('ksef_access_token');
+        $profileId = $this->getProfile()->id;
+        return Cache::has($this->cacheKey($profileId, 'offline', 'access_token')) 
+            || Cache::has($this->cacheKey($profileId, 'online', 'access_token'));
     }
 
     /**
@@ -670,19 +639,90 @@ class KsefService
      */
     public function getStatus(): array
     {
-        $certConfigured = $this->authMethod === 'certificate'
-            && file_exists(config('ksef.cert_path', ''))
-            && file_exists(config('ksef.key_path', ''));
+        $profile = $this->safeProfile();
+        $offlineCert = $profile?->offlineCertificate;
+        $onlineCert = $profile?->onlineCertificate;
+        
+        $offlineConfigured = $offlineCert
+            && Storage::disk('local')->exists($offlineCert->cert_path)
+            && Storage::disk('local')->exists($offlineCert->key_path);
+        $onlineConfigured = $onlineCert
+            && Storage::disk('local')->exists($onlineCert->cert_path)
+            && Storage::disk('local')->exists($onlineCert->key_path);
 
-        $tokenConfigured = $this->authMethod === 'token' && !empty($this->ksefToken);
+        $authMethod = $profile?->auth_method ?? 'certificate';
+        $nip = $profile?->nip;
 
         return [
-            'configured' => !empty($this->nip) && ($certConfigured || $tokenConfigured),
-            'authenticated' => $this->isAuthenticated(),
-            'nip' => $this->nip ? substr($this->nip, 0, 3) . '****' . substr($this->nip, -3) : null,
+            'configured' => !empty($nip) && $offlineConfigured && $onlineConfigured,
+            'offline_configured' => $offlineConfigured,
+            'online_configured' => $onlineConfigured,
+            'authenticated' => $profile ? $this->isAuthenticated() : false,
+            'nip' => $nip ? substr($nip, 0, 3) . '****' . substr($nip, -3) : null,
             'environment' => config('ksef.env'),
             'api_url' => $this->apiUrl,
-            'auth_method' => $this->authMethod,
+            'auth_method' => $authMethod,
         ];
+    }
+
+    private function getProfile(): KsefProfile
+    {
+        if ($this->profile instanceof KsefProfile) {
+            return $this->profile;
+        }
+
+        $user = Auth::user();
+
+        if (!$user) {
+            throw new \RuntimeException('Brak zalogowanego użytkownika dla połączenia z KSeF.');
+        }
+
+        $profile = $user->ksefProfile()->with('activeCertificate')->first();
+
+        if (!$profile) {
+            throw new \RuntimeException('Zalogowany użytkownik nie ma profilu KSeF.');
+        }
+
+        $this->profile = $profile;
+
+        return $profile;
+    }
+
+    private function safeProfile(): ?KsefProfile
+    {
+        try {
+            return $this->getProfile();
+        } catch (\RuntimeException) {
+            return null;
+        }
+    }
+
+    private function getCertificate(string $type): KsefCertificate
+    {
+        $profile = $this->getProfile();
+
+        if ($type === 'offline') {
+            $certificate = $profile->offlineCertificate;
+        } elseif ($type === 'online') {
+            $certificate = $profile->onlineCertificate;
+        } else {
+            throw new \RuntimeException("Nieznany typ certyfikatu: {$type}. Obsługiwane: offline, online");
+        }
+
+        if (!$certificate) {
+            throw new \RuntimeException("Użytkownik nie ma aktywnego certyfikatu {$type} KSeF.");
+        }
+
+        return $certificate;
+    }
+
+    private function getAuthMethod(): string
+    {
+        return $this->getProfile()->auth_method ?: 'certificate';
+    }
+
+    private function cacheKey(int $profileId, string $type, string $suffix): string
+    {
+        return 'ksef:profile:' . $profileId . ':' . $type . ':' . $suffix;
     }
 }

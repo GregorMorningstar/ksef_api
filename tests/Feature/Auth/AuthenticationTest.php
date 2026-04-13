@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Laravel\Fortify\Features;
 
 test('login screen can be rendered', function () {
@@ -12,14 +13,21 @@ test('login screen can be rendered', function () {
 
 test('users can authenticate using the login screen', function () {
     $user = User::factory()->create();
+    $nip = fake()->unique()->numerify('##########');
+
+    $user->ksefProfile()->create([
+        'nip' => $nip,
+        'storage_path' => 'ksef/users/' . $user->id,
+    ]);
 
     $response = $this->post(route('login.store'), [
-        'email' => $user->email,
+        'nip' => $nip,
         'password' => 'password',
     ]);
 
     $this->assertAuthenticated();
     $response->assertRedirect(route('dashboard', absolute: false));
+    $this->get(route('dashboard'))->assertRedirect(route('ksef.setup.create'));
 });
 
 test('users with two factor enabled are redirected to two factor challenge', function () {
@@ -31,6 +39,12 @@ test('users with two factor enabled are redirected to two factor challenge', fun
     ]);
 
     $user = User::factory()->create();
+    $nip = fake()->unique()->numerify('##########');
+
+    $user->ksefProfile()->create([
+        'nip' => $nip,
+        'storage_path' => 'ksef/users/' . $user->id,
+    ]);
 
     $user->forceFill([
         'two_factor_secret' => encrypt('test-secret'),
@@ -38,8 +52,8 @@ test('users with two factor enabled are redirected to two factor challenge', fun
         'two_factor_confirmed_at' => now(),
     ])->save();
 
-    $response = $this->post(route('login'), [
-        'email' => $user->email,
+    $response = $this->post(route('login.store'), [
+        'nip' => $nip,
         'password' => 'password',
     ]);
 
@@ -50,9 +64,15 @@ test('users with two factor enabled are redirected to two factor challenge', fun
 
 test('users can not authenticate with invalid password', function () {
     $user = User::factory()->create();
+    $nip = fake()->unique()->numerify('##########');
+
+    $user->ksefProfile()->create([
+        'nip' => $nip,
+        'storage_path' => 'ksef/users/' . $user->id,
+    ]);
 
     $this->post(route('login.store'), [
-        'email' => $user->email,
+        'nip' => $nip,
         'password' => 'wrong-password',
     ]);
 
@@ -70,13 +90,24 @@ test('users can logout', function () {
 
 test('users are rate limited', function () {
     $user = User::factory()->create();
+    $nip = fake()->unique()->numerify('##########');
 
-    RateLimiter::increment(md5('login'.implode('|', [$user->email, '127.0.0.1'])), amount: 5);
+    $user->ksefProfile()->create([
+        'nip' => $nip,
+        'storage_path' => 'ksef/users/' . $user->id,
+    ]);
 
-    $response = $this->post(route('login.store'), [
-        'email' => $user->email,
+    $throttleKey = Str::transliterate(Str::lower($nip).'|127.0.0.1');
+    RateLimiter::increment($throttleKey, amount: 5);
+
+    expect(RateLimiter::tooManyAttempts($throttleKey, 5))->toBeTrue();
+
+    $response = $this->from(route('login'))->post(route('login.store'), [
+        'nip' => $nip,
         'password' => 'wrong-password',
     ]);
 
-    $response->assertTooManyRequests();
+    $response
+        ->assertRedirect(route('login'))
+        ->assertSessionHasErrors(['nip']);
 });

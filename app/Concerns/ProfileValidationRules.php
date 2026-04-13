@@ -2,6 +2,7 @@
 
 namespace App\Concerns;
 
+use App\Models\KsefProfile;
 use App\Models\User;
 use Illuminate\Validation\Rule;
 
@@ -12,12 +13,18 @@ trait ProfileValidationRules
      *
      * @return array<string, array<int, \Illuminate\Contracts\Validation\Rule|array<mixed>|string>>
      */
-    protected function profileRules(?int $userId = null): array
+    protected function profileRules(?int $userId = null, bool $requireNip = true): array
     {
-        return [
+        $rules = [
             'name' => $this->nameRules(),
             'email' => $this->emailRules($userId),
         ];
+
+        if ($requireNip) {
+            $rules['nip'] = $this->nipRules($userId);
+        }
+
+        return $rules;
     }
 
     /**
@@ -45,6 +52,23 @@ trait ProfileValidationRules
             $userId === null
                 ? Rule::unique(User::class)
                 : Rule::unique(User::class)->ignore($userId),
+        ];
+    }
+
+    /**
+     * Get the validation rules used to validate user NIP values.
+     *
+     * @return array<int, \Illuminate\Contracts\Validation\Rule|array<mixed>|string>
+     */
+    protected function nipRules(?int $userId = null): array
+    {
+        return [
+            'required',
+            'string',
+            'digits:10',
+            $userId === null
+                ? Rule::unique(KsefProfile::class, 'nip')
+                : Rule::unique(KsefProfile::class, 'nip')->ignore($userId, 'user_id'),
         ];
     }
 }

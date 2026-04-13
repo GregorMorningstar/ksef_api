@@ -3,6 +3,7 @@ import {
     CheckCircle2,
     Download,
     FileText,
+    KeyRound,
     Loader2,
     LogIn,
     LogOut,
@@ -85,6 +86,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
     const [ksefNumber, setKsefNumber] = useState('');
     const [invoiceNumber, setInvoiceNumber] = useState('');
     const [pageOffset, setPageOffset] = useState(0);
+    const [keyPassword, setKeyPassword] = useState('');
 
     const clearMessages = () => {
         setError(null);
@@ -104,6 +106,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                     'X-CSRF-TOKEN':
                         document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
                 },
+                body: JSON.stringify({ key_password: keyPassword }),
             });
             const text = await res.text();
             let data: { success?: boolean; message?: string };
@@ -116,6 +119,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
             if (data.success) {
                 setSuccessMsg(data.message ?? 'Połączono');
                 setStatus((s) => ({ ...s, authenticated: true }));
+                setKeyPassword('');
             } else {
                 setError(data.message ?? `Błąd KSeF (HTTP ${res.status})`);
             }
@@ -272,8 +276,27 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                     {!status.configured && (
                         <CardContent>
                             <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-                                Konfiguracja wymagana: ustaw <code>KSEF_NIP</code> i <code>KSEF_TOKEN</code> w
-                                pliku <code>.env</code>
+                                Konfiguracja wymagana: dodaj certyfikat użytkownika na ekranie setupu KSeF.
+                            </div>
+                        </CardContent>
+                    )}
+                    {!status.authenticated && status.configured && (
+                        <CardContent className="pt-0">
+                            <div className="grid gap-2 md:max-w-sm">
+                                <Label htmlFor="keyPassword">Hasło do klucza prywatnego</Label>
+                                <div className="flex gap-2">
+                                    <div className="relative flex-1">
+                                        <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                        <Input
+                                            id="keyPassword"
+                                            type="password"
+                                            value={keyPassword}
+                                            onChange={(e) => setKeyPassword(e.target.value)}
+                                            className="pl-9"
+                                            placeholder="Podaj hasło do klucza"
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         </CardContent>
                     )}

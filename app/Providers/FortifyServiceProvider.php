@@ -4,8 +4,11 @@ namespace App\Providers;
 
 use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
+use App\Services\Contracts\KsefWorkspaceServiceInterface;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
@@ -29,6 +32,7 @@ class FortifyServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureActions();
+        $this->configureAuthentication();
         $this->configureViews();
         $this->configureRateLimiting();
     }
@@ -40,6 +44,31 @@ class FortifyServiceProvider extends ServiceProvider
     {
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
         Fortify::createUsersUsing(CreateNewUser::class);
+    }
+
+    /**
+     * Configure authentication callbacks.
+     */
+    private function configureAuthentication(): void
+    {
+        Fortify::authenticateUsing(function (Request $request): ?Authenticatable {
+            $request->validate([
+                'nip' => ['required', 'digits:10'],
+                'password' => ['required', 'string'],
+            ]);
+
+            /** @var KsefWorkspaceServiceInterface $workspaceService */
+            $workspaceService = app(KsefWorkspaceServiceInterface::class);
+            $profile = $workspaceService->findProfileByNip($request->string('nip')->toString());
+
+            if (!$profile?->user) {
+                return null;
+            }
+
+            return Hash::check($request->string('password')->toString(), $profile->user->password)
+                ? $profile->user
+                : null;
+        });
     }
 
     /**
@@ -83,7 +112,7 @@ class FortifyServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('login', function (Request $request) {
-            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
+            $throttleKey = Str::transliterate(Str::lower($request->input('nip', '')).'|'.$request->ip());
 
             return Limit::perMinute(5)->by($throttleKey);
         });

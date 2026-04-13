@@ -2,6 +2,10 @@
 
 namespace App\Providers;
 
+use App\Repositories\Contracts\KsefProfileRepositoryInterface;
+use App\Repositories\KsefProfileRepository;
+use App\Services\Contracts\KsefWorkspaceServiceInterface;
+use App\Services\KsefWorkspaceService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -15,7 +19,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(KsefProfileRepositoryInterface::class, KsefProfileRepository::class);
+        $this->app->bind(KsefWorkspaceServiceInterface::class, KsefWorkspaceService::class);
     }
 
     /**

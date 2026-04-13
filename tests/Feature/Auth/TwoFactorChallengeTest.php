@@ -21,6 +21,12 @@ test('two factor challenge can be rendered', function () {
     ]);
 
     $user = User::factory()->create();
+    $nip = fake()->unique()->numerify('##########');
+
+    $user->ksefProfile()->create([
+        'nip' => $nip,
+        'storage_path' => 'ksef/users/' . $user->id,
+    ]);
 
     $user->forceFill([
         'two_factor_secret' => encrypt('test-secret'),
@@ -28,8 +34,8 @@ test('two factor challenge can be rendered', function () {
         'two_factor_confirmed_at' => now(),
     ])->save();
 
-    $this->post(route('login'), [
-        'email' => $user->email,
+    $this->post(route('login.store'), [
+        'nip' => $nip,
         'password' => 'password',
     ]);
 

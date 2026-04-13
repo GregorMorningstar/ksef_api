@@ -36,14 +36,21 @@ class KsefController extends Controller
     /**
      * Authenticate with KSeF API.
      */
-    public function authenticate(): JsonResponse
+    public function authenticate(Request $request): JsonResponse
     {
+        $request->validate([
+            'type' => ['required', 'in:offline,online'],
+            'key_password' => ['required', 'string'],
+        ]);
+
         try {
-            $tokens = $this->ksef->authenticate();
+            $type = $request->string('type')->toString();
+            $password = $request->string('key_password')->toString();
+            $tokens = $this->ksef->authenticate($type, $password);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Połączono z KSeF',
+                'message' => 'Połączono z KSeF (' . $type . ')',
                 'validUntil' => $tokens['accessToken']['validUntil'] ?? null,
             ]);
         } catch (\GuzzleHttp\Exception\ClientException $e) {
