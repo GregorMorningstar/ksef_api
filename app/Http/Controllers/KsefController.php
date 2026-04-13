@@ -2,7 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\KsefMyInvoicesRequest;
+use App\Services\KsefInvoiceService;
+use App\Services\Contracts\KsefWorkspaceServiceInterface;
 use App\Services\KsefService;
+use GuzzleHttp\Exception\ClientException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -12,8 +16,38 @@ use Inertia\Response;
 class KsefController extends Controller
 {
     public function __construct(
-        private KsefService $ksef
+        private KsefService $ksef,
+        private KsefInvoiceService $invoiceService,
+        private KsefWorkspaceServiceInterface $workspaceService,
     ) {}
+
+    /**
+     * Dashboard with KSeF connection status.
+     */
+    public function dashboard(): Response
+    {
+        $profile = $this->workspaceService->findProfileForUser(request()->user());
+        $offline = $profile?->offlineCertificate;
+        $online = $profile?->onlineCertificate;
+
+        return Inertia::render('dashboard', [
+            'ksefStatus' => $this->ksef->getStatus(),
+            'certificatePanel' => [
+                'hasOffline' => (bool) $offline,
+                'hasOnline' => (bool) $online,
+                'offline' => $offline ? [
+                    'certFilename' => $offline->cert_filename,
+                    'keyFilename' => $offline->key_filename,
+                    'updatedAt' => $offline->updated_at?->format('Y-m-d H:i'),
+                ] : null,
+                'online' => $online ? [
+                    'certFilename' => $online->cert_filename,
+                    'keyFilename' => $online->key_filename,
+                    'updatedAt' => $online->updated_at?->format('Y-m-d H:i'),
+                ] : null,
+            ],
+        ]);
+    }
 
     /**
      * Main KSeF invoices page.
@@ -26,11 +60,79 @@ class KsefController extends Controller
     }
 
     /**
+     * Local DB invoices view (synced from KSeF).
+     */
+    public function myInvoices(KsefMyInvoicesRequest $request): Response
+    {
+        $filters = $request->validated();
+        $paginator = $this->invoiceService->paginateForUser($request->user(), $filters);
+
+        return Inertia::render('ksef/my-invoices', [
+            'filters' => [
+                'dateFrom' => $filters['dateFrom'] ?? null,
+                'dateTo' => $filters['dateTo'] ?? null,
+                'kind' => $filters['kind'] ?? '',
+                'search' => $filters['search'] ?? '',
+                'perPage' => $filters['perPage'] ?? 20,
+            ],
+            'invoices' => [
+                'data' => $paginator->items(),
+                'currentPage' => $paginator->currentPage(),
+                'lastPage' => $paginator->lastPage(),
+                'perPage' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ],
+        ]);
+    }
+
+    /**
+     * Local DB invoices API.
+     */
+    public function myInvoicesData(KsefMyInvoicesRequest $request): JsonResponse
+    {
+        $filters = $request->validated();
+        $paginator = $this->invoiceService->paginateForUser($request->user(), $filters);
+
+        return response()->json([
+            'data' => $paginator->items(),
+            'currentPage' => $paginator->currentPage(),
+            'lastPage' => $paginator->lastPage(),
+            'perPage' => $paginator->perPage(),
+            'total' => $paginator->total(),
+        ]);
+    }
+
+    /**
      * Get KSeF connection status.
      */
     public function status(): JsonResponse
     {
         return response()->json($this->ksef->getStatus());
+    }
+
+    /**
+     * Keep current KSeF session alive on user activity.
+     */
+    public function keepAlive(Request $request): JsonResponse
+    {
+        $request->validate([
+            'type' => ['nullable', 'in:offline,online'],
+        ]);
+
+        try {
+            $meta = $this->ksef->keepAlive($request->input('type'));
+
+            return response()->json([
+                'success' => true,
+                'validUntil' => $meta['validUntil'] ?? null,
+                'type' => $meta['type'] ?? null,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sesja KSeF wygasła. Połącz ponownie, podając hasło do klucza prywatnego.',
+            ], 422);
+        }
     }
 
     /**
@@ -48,15 +150,83 @@ class KsefController extends Controller
             $password = $request->string('key_password')->toString();
             $tokens = $this->ksef->authenticate($type, $password);
 
+            // Automatyczne pobieranie nowych faktur po połączeniu
+            $user = $request->user();
+            $lastInvoice = \App\Models\KsefInvoice::where('user_id', $user->id)->orderByDesc('issue_date')->first();
+            $dateFrom = $lastInvoice?->issue_date ? $lastInvoice->issue_date->format('Y-m-d') : now()->subYear()->format('Y-m-d');
+            $dateTo = now()->format('Y-m-d');
+            $filters = [
+                'subjectType' => 'Subject1',
+                'dateRange' => [
+                    'dateType' => 'Invoicing',
+                    'from' => $dateFrom . 'T00:00:00+00:00',
+                    'to' => $dateTo . 'T23:59:59+00:00',
+                ],
+            ];
+            try {
+                $result = $this->ksef->searchInvoices($filters, 0, 100, 'Desc', $type);
+                if (!empty($result['invoices'])) {
+                    foreach ($result['invoices'] as $inv) {
+                        \App\Models\KsefInvoice::updateOrCreate(
+                            [
+                                'user_id' => $user->id,
+                                'ksef_id' => $inv['ksefReferenceNumber'],
+                            ],
+                            [
+                                'reference_number' => $inv['referenceNumber'] ?? null,
+                                'number' => $inv['invoiceNumber'] ?? null,
+                                'issue_date' => $inv['invoiceIssueDate'] ?? null,
+                                'sale_date' => $inv['invoiceSaleDate'] ?? null,
+                                'due_date' => $inv['paymentDueDate'] ?? null,
+                                'buyer_nip' => $inv['buyerNip'] ?? null,
+                                'buyer_name' => $inv['buyerName'] ?? null,
+                                'buyer_address' => $inv['buyerAddress'] ?? null,
+                                'seller_nip' => $inv['sellerNip'] ?? null,
+                                'seller_name' => $inv['sellerName'] ?? null,
+                                'seller_address' => $inv['sellerAddress'] ?? null,
+                                'total_gross' => $inv['totalGrossAmount'] ?? null,
+                                'total_net' => $inv['totalNetAmount'] ?? null,
+                                'total_vat' => $inv['totalVatAmount'] ?? null,
+                                'currency' => $inv['currency'] ?? null,
+                                'status' => 'new',
+                                'raw_json' => json_encode($inv),
+                            ]
+                        );
+                    }
+                }
+            } catch (\Throwable $syncError) {
+                Log::warning('KSeF invoice sync after auth failed', [
+                    'error' => $syncError->getMessage(),
+                    'type' => $type,
+                    'user_id' => $user->id,
+                ]);
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Połączono z KSeF (' . $type . ')',
+                'message' => 'Połączono z KSeF (' . $type . '). Nowe faktury zostały pobrane.',
                 'validUntil' => $tokens['accessToken']['validUntil'] ?? null,
             ]);
         } catch (\GuzzleHttp\Exception\ClientException $e) {
             $body = $e->getResponse() ? $e->getResponse()->getBody()->getContents() : '';
             $parsed = json_decode($body, true);
-            $detail = $parsed['status']['description'] ?? ($parsed['message'] ?? $body);
+            $detail = $parsed['status']['description']
+                ?? $parsed['message']
+                ?? $parsed['exception']['exceptionDetailList'][0]['exceptionDescription']
+                ?? $body;
+
+            $apiDetails = $parsed['exception']['exceptionDetailList'][0]['details'] ?? null;
+            if (is_array($apiDetails) && count($apiDetails) > 0) {
+                $detail .= ' — ' . implode('; ', $apiDetails);
+            }
+
+            if (str_contains($detail, 'Brak przypisanych uprawnień')) {
+                $detail .= ' (Sprawdź uprawnienia certyfikatu/NIP w KSeF dla wybranego typu: offline/online)';
+            }
+
+            if (str_contains($detail, 'Nieprawidłowy podpis')) {
+                $detail .= ' (Sprawdź czy certyfikat i klucz są parą oraz czy hasło dotyczy tego klucza)';
+            }
 
             Log::error('KSeF auth HTTP error', [
                 'status' => $e->getResponse()?->getStatusCode(),
@@ -96,11 +266,29 @@ class KsefController extends Controller
     }
 
     /**
+     * Clear cached KSeF session data.
+     */
+    public function clearSession(Request $request): JsonResponse
+    {
+        $request->validate([
+            'type' => ['nullable', 'in:offline,online'],
+        ]);
+
+        $this->ksef->clearSession($request->input('type'));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Sesja KSeF została skasowana.',
+        ]);
+    }
+
+    /**
      * Search invoices by filters.
      */
     public function searchInvoices(Request $request): JsonResponse
     {
         $request->validate([
+            'type' => 'nullable|in:offline,online',
             'dateFrom' => 'required|date',
             'dateTo' => 'required|date|after_or_equal:dateFrom',
             'subjectType' => 'required|in:Subject1,Subject2,Subject3,SubjectAuthorized',
@@ -134,9 +322,28 @@ class KsefController extends Controller
                 $filters,
                 $request->input('pageOffset', 0),
                 $request->input('pageSize', 50),
+                'Desc',
+                $request->input('type', 'online'),
             );
 
             return response()->json($result);
+        } catch (ClientException $e) {
+            if ($e->getResponse()?->getStatusCode() === 429) {
+                $body = $e->getResponse()->getBody()->getContents();
+                $parsed = json_decode($body, true);
+                $details = $parsed['status']['details'] ?? [];
+                $detailText = is_array($details) && $details !== []
+                    ? ' ' . implode(' ', $details)
+                    : '';
+
+                return response()->json([
+                    'error' => 'Limit zapytań KSeF został przekroczony. Możesz wykonać maksymalnie 20 wyszukań na godzinę.' . $detailText,
+                ], 429);
+            }
+
+            return response()->json([
+                'error' => 'Błąd wyszukiwania: ' . $e->getMessage(),
+            ], 422);
         } catch (\Exception $e) {
             return response()->json([
                 'error' => 'Błąd wyszukiwania: ' . $e->getMessage(),
@@ -147,10 +354,11 @@ class KsefController extends Controller
     /**
      * Get single invoice XML.
      */
-    public function getInvoice(string $ksefNumber): \Illuminate\Http\Response|JsonResponse
+    public function getInvoice(Request $request, string $ksefNumber): \Illuminate\Http\Response|JsonResponse
     {
         try {
-            $xml = $this->ksef->getInvoiceByKsefNumber($ksefNumber);
+            $type = $request->input('type', 'online');
+            $xml = $this->ksef->getInvoiceByKsefNumber($ksefNumber, $type);
 
             return response($xml, 200, [
                 'Content-Type' => 'application/xml',
@@ -165,10 +373,11 @@ class KsefController extends Controller
     /**
      * Download invoice XML as file.
      */
-    public function downloadInvoice(string $ksefNumber): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
+    public function downloadInvoice(Request $request, string $ksefNumber): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
     {
         try {
-            $xml = $this->ksef->getInvoiceByKsefNumber($ksefNumber);
+            $type = $request->input('type', 'online');
+            $xml = $this->ksef->getInvoiceByKsefNumber($ksefNumber, $type);
 
             return response()->streamDownload(function () use ($xml) {
                 echo $xml;

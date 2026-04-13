@@ -1,58 +1,450 @@
-import { Head } from '@inertiajs/react';
+import { Head, Link } from '@inertiajs/react';
 import Heading from '@/components/heading';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 import { dashboard } from '@/routes';
-import { FileText, DollarSign, CheckCircle2 } from 'lucide-react';
+import { FileText, DollarSign, CheckCircle2, LogIn, LogOut, KeyRound, Loader2, Wifi, WifiOff, ShieldCheck, Download, Settings2, Search, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-// Mock data for invoices (in production, this would come from KSeF API)
-const mockInvoices = [
-    { id: 1, ksefNumber: 'KSF/2025/001/01/00123456', issuer: 'Firma A Sp. z o.o.', nip: '1234567890', amount: 5000, vat: 920, status: 'accepted', date: '2025-04-10' },
-    { id: 2, ksefNumber: 'KSF/2025/001/01/00123457', issuer: 'Firma B Sp. z o.o.', nip: '9876543210', amount: 3500, vat: 642, status: 'pending', date: '2025-04-09' },
-    { id: 3, ksefNumber: 'KSF/2025/001/01/00123458', issuer: 'Firma C Sp. z o.o.', nip: '5555555555', amount: 7200, vat: 1320, status: 'accepted', date: '2025-04-08' },
-    { id: 4, ksefNumber: 'KSF/2025/001/01/00123459', issuer: 'Firma D Sp. z o.o.', nip: '1111111111', amount: 2100, vat: 385, status: 'rejected', date: '2025-04-07' },
-    { id: 5, ksefNumber: 'KSF/2025/001/01/00123460', issuer: 'Firma E Sp. z o.o.', nip: '2222222222', amount: 4600, vat: 843, status: 'accepted', date: '2025-04-06' },
-    { id: 6, ksefNumber: 'KSF/2025/001/01/00123461', issuer: 'Firma F Sp. z o.o.', nip: '3333333333', amount: 8900, vat: 1630, status: 'accepted', date: '2025-04-05' },
-    { id: 7, ksefNumber: 'KSF/2025/001/01/00123462', issuer: 'Firma G Sp. z o.o.', nip: '4444444444', amount: 1200, vat: 220, status: 'pending', date: '2025-04-04' },
-    { id: 8, ksefNumber: 'KSF/2025/001/01/00123463', issuer: 'Firma H Sp. z o.o.', nip: '5555666666', amount: 6700, vat: 1227, status: 'accepted', date: '2025-04-03' },
-    { id: 9, ksefNumber: 'KSF/2025/001/01/00123464', issuer: 'Firma I Sp. z o.o.', nip: '6666777777', amount: 3300, vat: 605, status: 'accepted', date: '2025-04-02' },
-    { id: 10, ksefNumber: 'KSF/2025/001/01/00123465', issuer: 'Firma J Sp. z o.o.', nip: '7777888888', amount: 4400, vat: 806, status: 'accepted', date: '2025-04-01' },
-];
+type KsefStatus = {
+    configured: boolean;
+    authenticated: boolean;
+    nip: string | null;
+    session_type?: 'offline' | 'online' | null;
+    session_valid_until?: string | null;
+};
 
-const stats = {
-    totalInvoices: mockInvoices.length,
-    totalAmount: mockInvoices.reduce((sum, inv) => sum + inv.amount, 0),
-    totalVat: mockInvoices.reduce((sum, inv) => sum + inv.vat, 0),
-    acceptedCount: mockInvoices.filter(inv => inv.status === 'accepted').length,
+type InvoiceMetadata = {
+    ksefNumber?: string;
+    ksefReferenceNumber?: string;
+    invoiceNumber?: string;
+    invoicingDate?: string;
+    acquisitionDate?: string;
+    sellerName?: string;
+    sellerNip?: string;
+    buyerName?: string;
+    buyerNip?: string;
+    grossValue?: number;
+    netValue?: number;
+    vatValue?: number;
+    totalGrossAmount?: number;
+    totalNetAmount?: number;
+    totalVatAmount?: number;
+    currency?: string;
+    invoiceType?: string;
+    formType?: string;
+    status?: string;
+};
+
+type CertificateInfo = {
+    certFilename: string;
+    keyFilename: string;
+    updatedAt: string | null;
+};
+
+type CertificatePanel = {
+    hasOffline: boolean;
+    hasOnline: boolean;
+    offline: CertificateInfo | null;
+    online: CertificateInfo | null;
+};
+
+type Props = {
+    ksefStatus: KsefStatus;
+    certificatePanel: CertificatePanel;
+};
+
+const toNumber = (value: unknown): number => {
+    if (typeof value === 'number') {
+        return value;
+    }
+    if (typeof value === 'string' && value !== '') {
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
 };
 
 const getStatusColor = (status: string) => {
     switch (status) {
-        case 'accepted':
-            return 'bg-green-100 text-green-800';
-        case 'pending':
-            return 'bg-yellow-100 text-yellow-800';
-        case 'rejected':
-            return 'bg-red-100 text-red-800';
-        default:
-            return 'bg-gray-100 text-gray-800';
+        case 'accepted': return 'bg-green-100 text-green-800';
+        case 'pending': return 'bg-yellow-100 text-yellow-800';
+        case 'rejected': return 'bg-red-100 text-red-800';
+        default: return 'bg-gray-100 text-gray-800';
     }
 };
 
 const getStatusLabel = (status: string) => {
     switch (status) {
-        case 'accepted':
-            return 'Zaakceptowana';
-        case 'pending':
-            return 'Oczekująca';
-        case 'rejected':
-            return 'Odrzucona';
-        default:
-            return status;
+        case 'accepted': return 'Zaakceptowana';
+        case 'pending': return 'Oczekująca';
+        case 'rejected': return 'Odrzucona';
+        default: return status;
     }
 };
 
-export default function Dashboard() {
+const csrf = () =>
+    document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '';
+
+function CertificateTypeCard({
+    type,
+    info,
+}: {
+    type: 'offline' | 'online';
+    info: CertificateInfo | null;
+}) {
+    const label = type === 'offline' ? 'Offline' : 'Online';
+    const accent = type === 'offline' ? 'text-blue-700 bg-blue-50' : 'text-green-700 bg-green-50';
+
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white/80 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                    <div className={`rounded-full px-2.5 py-1 text-xs font-semibold ${accent}`}>
+                        {label}
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                        {info ? 'Certyfikat zapisany' : 'Brak certyfikatu'}
+                    </span>
+                </div>
+                {info ? (
+                    <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Aktywny</Badge>
+                ) : (
+                    <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Wymagany</Badge>
+                )}
+            </div>
+
+            {info ? (
+                <div className="space-y-3 text-sm">
+                    <div>
+                        <div className="text-xs text-muted-foreground">Certyfikat</div>
+                        <div className="font-mono text-xs font-medium text-slate-800">{info.certFilename}</div>
+                    </div>
+                    <div>
+                        <div className="text-xs text-muted-foreground">Klucz</div>
+                        <div className="font-mono text-xs font-medium text-slate-800">{info.keyFilename}</div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">Zaktualizowano: {info.updatedAt ?? 'brak danych'}</div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                        <Button asChild size="sm" variant="outline">
+                            <a href={`/ksef/setup/${type}/certificate`}>
+                                <Download className="mr-2 h-3.5 w-3.5" />
+                                Pobierz certyfikat
+                            </a>
+                        </Button>
+                        <Button asChild size="sm" variant="outline">
+                            <a href={`/ksef/setup/${type}/key`}>
+                                <Download className="mr-2 h-3.5 w-3.5" />
+                                Pobierz klucz
+                            </a>
+                        </Button>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-sm text-muted-foreground">
+                    Dodaj ten certyfikat na ekranie konfiguracji KSeF, aby odblokować pełną obsługę połączenia.
+                </p>
+            )}
+        </div>
+    );
+}
+
+export default function Dashboard({ ksefStatus: initialStatus, certificatePanel }: Props) {
+    const [status, setStatus] = useState<KsefStatus>(initialStatus);
+    const [keyPassword, setKeyPassword] = useState('');
+    const [authType, setAuthType] = useState<'offline' | 'online'>(
+        initialStatus.session_type === 'offline' || initialStatus.session_type === 'online'
+            ? initialStatus.session_type
+            : (certificatePanel.hasOffline ? 'offline' : 'online')
+    );
+    const [authLoading, setAuthLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [successMsg, setSuccessMsg] = useState<string | null>(null);
+    const [sessionValidUntil, setSessionValidUntil] = useState<string | null>(initialStatus.session_valid_until ?? null);
+    const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number | null>(null);
+    const [invoices, setInvoices] = useState<InvoiceMetadata[]>([]);
+    const [invoiceLoading, setInvoiceLoading] = useState(false);
+    const [dateFrom, setDateFrom] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 30);
+        return d.toISOString().split('T')[0];
+    });
+    const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0]);
+    const [subjectType, setSubjectType] = useState<'Subject1' | 'Subject2' | 'Subject3' | 'SubjectAuthorized'>('Subject1');
+    const hasFetchedForCurrentSession = useRef(initialStatus.authenticated);
+
+    const stats = {
+        totalInvoices: invoices.length,
+        totalAmount: invoices.reduce((sum, inv) => sum + toNumber(inv.netValue ?? inv.totalNetAmount), 0),
+        totalVat: invoices.reduce((sum, inv) => sum + toNumber(inv.vatValue ?? inv.totalVatAmount), 0),
+        acceptedCount: invoices.filter((inv) => String(inv.status ?? '').toLowerCase() === 'accepted').length,
+    };
+
+    const fetchInvoices = useCallback(async () => {
+        if (!status.authenticated) {
+            setInvoices([]);
+            return;
+        }
+
+        setInvoiceLoading(true);
+        setError(null);
+        try {
+            const res = await fetch('/ksef/invoices/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+                body: JSON.stringify({
+                    type: authType,
+                    dateFrom,
+                    dateTo,
+                    subjectType,
+                    pageOffset: 0,
+                    pageSize: 50,
+                }),
+            });
+
+            const data = await res.json();
+            if (data.error) {
+                setError(data.error);
+                setInvoices([]);
+                return;
+            }
+
+            setInvoices(Array.isArray(data.invoices) ? data.invoices : []);
+        } catch {
+            setError('Nie udało się pobrać faktur z KSeF');
+            setInvoices([]);
+        } finally {
+            setInvoiceLoading(false);
+        }
+    }, [authType, dateFrom, dateTo, subjectType, status.authenticated]);
+
+    const keepSessionAlive = useCallback(async () => {
+        if (!status.authenticated) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/ksef/keep-alive', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+                body: JSON.stringify({ type: authType }),
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                if (data.validUntil) {
+                    setSessionValidUntil(data.validUntil);
+                }
+                if (data.type === 'offline' || data.type === 'online') {
+                    setAuthType(data.type);
+                }
+            } else {
+                setStatus((s) => ({ ...s, authenticated: false }));
+                setSessionValidUntil(null);
+            }
+        } catch {
+            // keep-alive is best effort
+        }
+    }, [authType, status.authenticated]);
+
+    useEffect(() => {
+        if (!sessionValidUntil) {
+            setSessionSecondsLeft(null);
+            return;
+        }
+
+        const updateLeft = () => {
+            const endMs = new Date(sessionValidUntil).getTime();
+            if (Number.isNaN(endMs)) {
+                setSessionSecondsLeft(null);
+                return;
+            }
+
+            const left = Math.max(0, Math.floor((endMs - Date.now()) / 1000));
+            setSessionSecondsLeft(left);
+        };
+
+        updateLeft();
+        const timer = window.setInterval(updateLeft, 1000);
+        return () => window.clearInterval(timer);
+    }, [sessionValidUntil]);
+
+    useEffect(() => {
+        if (status.authenticated && sessionSecondsLeft === 0) {
+            setStatus((s) => ({ ...s, authenticated: false }));
+            setSessionValidUntil(null);
+            setError('Sesja KSeF wygasła. Połącz ponownie, podając hasło do klucza prywatnego.');
+        }
+    }, [sessionSecondsLeft, status.authenticated]);
+
+    useEffect(() => {
+        if (!status.authenticated) {
+            hasFetchedForCurrentSession.current = false;
+            return;
+        }
+
+        if (hasFetchedForCurrentSession.current) {
+            return;
+        }
+
+        hasFetchedForCurrentSession.current = true;
+        void fetchInvoices();
+    }, [status.authenticated, fetchInvoices]);
+
+    useEffect(() => {
+        if (!status.authenticated) {
+            return;
+        }
+
+        let lastPing = 0;
+        const ping = () => {
+            const now = Date.now();
+            if (now - lastPing < 30000) {
+                return;
+            }
+            lastPing = now;
+            void keepSessionAlive();
+        };
+
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') {
+                ping();
+            }
+        };
+
+        window.addEventListener('mousemove', ping);
+        window.addEventListener('keydown', ping);
+        window.addEventListener('click', ping);
+        document.addEventListener('visibilitychange', onVisible);
+
+        return () => {
+            window.removeEventListener('mousemove', ping);
+            window.removeEventListener('keydown', ping);
+            window.removeEventListener('click', ping);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [keepSessionAlive, status.authenticated]);
+
+    const formatSessionLeft = (seconds: number | null) => {
+        if (seconds === null) {
+            return 'brak danych';
+        }
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        return `${hours.toString().padStart(2, '0')}:${minutes
+            .toString()
+            .padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const handleAuth = useCallback(async () => {
+        if (!keyPassword.trim()) return;
+        setError(null);
+        setSuccessMsg(null);
+        setAuthLoading(true);
+        try {
+            const res = await fetch('/ksef/authenticate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+                body: JSON.stringify({ type: authType, key_password: keyPassword }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSuccessMsg(data.message ?? `Połączono z KSeF (${authType})`);
+                setStatus((s) => ({ ...s, authenticated: true }));
+                setSessionValidUntil(data.validUntil ?? null);
+                setKeyPassword('');
+            } else {
+                setError(data.message ?? `Błąd KSeF (HTTP ${res.status})`);
+            }
+        } catch {
+            setError('Błąd połączenia z serwerem — sprawdź czy serwer działa');
+        } finally {
+            setAuthLoading(false);
+        }
+    }, [authType, fetchInvoices, keyPassword]);
+
+    const handleLogout = useCallback(async () => {
+        setError(null);
+        setSuccessMsg(null);
+        try {
+            const res = await fetch('/ksef/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSuccessMsg(data.message);
+                setStatus((s) => ({ ...s, authenticated: false }));
+                setSessionValidUntil(null);
+                setSessionSecondsLeft(null);
+                setInvoices([]);
+            }
+        } catch {
+            setError('Błąd rozłączania');
+        }
+    }, []);
+
+    const handleClearSession = useCallback(async () => {
+        setError(null);
+        setSuccessMsg(null);
+        try {
+            const res = await fetch('/ksef/session/clear', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+                body: JSON.stringify({ type: authType }),
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                setSuccessMsg(data.message ?? 'Sesja KSeF została skasowana.');
+            } else {
+                setError(data.message ?? 'Nie udało się skasować sesji.');
+            }
+
+            // Always reset dashboard timer/session view after explicit user action.
+            setStatus((s) => ({ ...s, authenticated: false }));
+            setSessionValidUntil(null);
+            setSessionSecondsLeft(null);
+            setInvoices([]);
+        } catch {
+            setStatus((s) => ({ ...s, authenticated: false }));
+            setSessionValidUntil(null);
+            setSessionSecondsLeft(null);
+            setInvoices([]);
+            setError('Sesja lokalna została wyczyszczona, ale serwer nie odpowiedział.');
+        }
+    }, [authType]);
+
     return (
         <>
             <Head title="Dashboard" />
@@ -63,6 +455,202 @@ export default function Dashboard() {
                         description="Przegląd pobranych faktur i statystyki"
                     />
                 </div>
+
+                {/* KSeF Connection Panel */}
+                <Card className={`border-0 shadow-sm ring-1 ${status.authenticated ? 'ring-green-300 bg-green-50/40' : 'ring-black/5'}`}>
+                    <CardContent className="pt-5">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                            {/* Status */}
+                            <div className="flex items-center gap-3">
+                                {status.authenticated ? (
+                                    <>
+                                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
+                                            <Wifi className="h-4 w-4 text-green-600" />
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-green-800">Połączono z KSeF</div>
+                                            <div className="text-xs text-green-600">Sesja aktywna · NIP: {status.nip}</div>
+                                            <div className="text-xs text-green-700">
+                                                Sesja wygasa za: {formatSessionLeft(sessionSecondsLeft)}
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
+                                            <WifiOff className="h-4 w-4 text-slate-500" />
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-slate-900">Nie połączono z KSeF</div>
+                                            <div className="text-xs text-muted-foreground">Wybierz typ certyfikatu i podaj hasło do klucza prywatnego</div>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Action */}
+                            {status.authenticated ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleClearSession}
+                                        className="border-orange-200 text-orange-700 hover:bg-orange-50 hover:text-orange-800"
+                                    >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Kasuj sesję
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleLogout}
+                                        className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                    >
+                                        <LogOut className="mr-2 h-4 w-4" />
+                                        Rozłącz
+                                    </Button>
+                                </div>
+                            ) : (
+                                <div className="flex items-end gap-2">
+                                    <div className="grid gap-1">
+                                        <Label htmlFor="dashboard-auth-type" className="text-xs">
+                                            Typ certyfikatu
+                                        </Label>
+                                        <Select value={authType} onValueChange={(value: 'offline' | 'online') => setAuthType(value)}>
+                                            <SelectTrigger id="dashboard-auth-type" className="h-8 w-36 text-sm">
+                                                <SelectValue placeholder="Wybierz typ" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="offline" disabled={!certificatePanel.hasOffline}>
+                                                    Offline
+                                                </SelectItem>
+                                                <SelectItem value="online" disabled={!certificatePanel.hasOnline}>
+                                                    Online
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="grid gap-1">
+                                        <Label htmlFor="dashboard-key-password" className="flex items-center gap-1 text-xs">
+                                            <KeyRound className="h-3 w-3" />
+                                            Hasło do klucza prywatnego
+                                        </Label>
+                                        <Input
+                                            id="dashboard-key-password"
+                                            type="password"
+                                            placeholder="••••••••"
+                                            value={keyPassword}
+                                            onChange={(e) => setKeyPassword(e.target.value)}
+                                            onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                                            className="h-8 w-64 text-sm"
+                                        />
+                                    </div>
+                                    <Button
+                                        size="sm"
+                                        onClick={handleAuth}
+                                        disabled={authLoading || !keyPassword.trim() || (authType === 'offline' ? !certificatePanel.hasOffline : !certificatePanel.hasOnline)}
+                                        className="bg-teal-700 hover:bg-teal-800"
+                                    >
+                                        {authLoading ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <LogIn className="mr-2 h-4 w-4" />
+                                        )}
+                                        {authLoading ? 'Łączenie...' : 'Połącz z KSeF'}
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Feedback messages */}
+                        {error && (
+                            <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-red-200">
+                                {error}
+                            </div>
+                        )}
+                        {successMsg && (
+                            <div className="mt-3 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 ring-1 ring-green-200">
+                                {successMsg}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card className="border-0 shadow-sm ring-1 ring-black/5">
+                    <CardHeader className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="space-y-1.5">
+                            <CardTitle className="flex items-center gap-2">
+                                <ShieldCheck className="h-5 w-5 text-teal-700" />
+                                Zarządzanie certyfikatami
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground">
+                                Podgląd aktywnych certyfikatów użytkownika i szybkie przejście do wymiany plików.
+                            </p>
+                        </div>
+                        <Button asChild className="bg-teal-700 hover:bg-teal-800">
+                            <Link href="/ksef/setup">
+                                <Settings2 className="mr-2 h-4 w-4" />
+                                Otwórz panel certyfikatów
+                            </Link>
+                        </Button>
+                    </CardHeader>
+                    <CardContent className="grid gap-4 md:grid-cols-2">
+                        <CertificateTypeCard type="offline" info={certificatePanel.offline} />
+                        <CertificateTypeCard type="online" info={certificatePanel.online} />
+                        <div className="md:col-span-2 flex flex-wrap items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700 ring-1 ring-slate-200">
+                            <span>
+                                Status kompletu: {certificatePanel.hasOffline && certificatePanel.hasOnline ? 'offline + online gotowe' : 'brak pełnego zestawu'}
+                            </span>
+                            {!certificatePanel.hasOffline || !certificatePanel.hasOnline ? (
+                                <span className="text-amber-700">
+                                    Brakujący certyfikat uzupełnij w panelu konfiguracji.
+                                </span>
+                            ) : null}
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Filtry faktur KSeF */}
+                <Card className="border-0 shadow-sm ring-1 ring-black/5">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Search className="h-4 w-4" />
+                            Filtry faktur KSeF
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid gap-3 md:grid-cols-4">
+                            <div className="grid gap-1">
+                                <Label htmlFor="dateFrom">Data od</Label>
+                                <Input id="dateFrom" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                            </div>
+                            <div className="grid gap-1">
+                                <Label htmlFor="dateTo">Data do</Label>
+                                <Input id="dateTo" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                            </div>
+                            <div className="grid gap-1">
+                                <Label htmlFor="subjectType">Rodzaj</Label>
+                                <Select value={subjectType} onValueChange={(value: 'Subject1' | 'Subject2' | 'Subject3' | 'SubjectAuthorized') => setSubjectType(value)}>
+                                    <SelectTrigger id="subjectType">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="Subject1">Subject1</SelectItem>
+                                        <SelectItem value="Subject2">Subject2</SelectItem>
+                                        <SelectItem value="Subject3">Subject3</SelectItem>
+                                        <SelectItem value="SubjectAuthorized">SubjectAuthorized</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="flex items-end">
+                                <Button onClick={() => void fetchInvoices()} disabled={!status.authenticated || invoiceLoading} className="w-full bg-teal-700 hover:bg-teal-800">
+                                    {invoiceLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+                                    Szukaj
+                                </Button>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
 
                 {/* Statistics Cards */}
                 <div className="grid gap-4 md:grid-cols-4">
@@ -111,50 +699,57 @@ export default function Dashboard() {
                     </Card>
                 </div>
 
-                {/* Recent Invoices Table */}
+                {/* Recent Invoices */}
                 <Card className="border-0 shadow-sm ring-1 ring-black/5">
                     <CardHeader>
-                        <CardTitle>Ostatnie faktury (10)</CardTitle>
+                        <CardTitle>Faktury z KSeF</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <div className="overflow-x-auto">
+                        {invoiceLoading ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Pobieranie faktur z KSeF...
+                            </div>
+                        ) : invoices.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">Brak faktur dla wybranych filtrów.</div>
+                        ) : (
                             <div className="grid gap-2">
-                                {mockInvoices.slice(0, 10).map((invoice) => (
-                                    <div key={invoice.id} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white/50 p-3 text-sm md:grid-cols-7 md:gap-4">
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Numer KSeF</div>
-                                            <div className="font-mono text-xs font-semibold">{invoice.ksefNumber}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Wysyłający</div>
-                                            <div className="truncate font-medium">{invoice.issuer}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">NIP</div>
-                                            <div className="font-mono text-xs">{invoice.nip}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Netto</div>
-                                            <div className="font-semibold text-green-700">{invoice.amount.toLocaleString()} zł</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">VAT</div>
-                                            <div className="font-semibold text-blue-700">{invoice.vat.toLocaleString()} zł</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Status</div>
-                                            <Badge className={getStatusColor(invoice.status)}>
-                                                {getStatusLabel(invoice.status)}
-                                            </Badge>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Data</div>
-                                            <div className="text-xs text-muted-foreground">{invoice.date}</div>
-                                        </div>
+                                {invoices.map((invoice, index) => (
+                                    <div key={`${invoice.ksefNumber ?? invoice.ksefReferenceNumber ?? 'inv'}-${index}`} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white/50 p-3 text-sm md:grid-cols-7 md:gap-4">
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Numer KSeF</div>
+                                        <div className="font-mono text-xs font-semibold">{invoice.ksefNumber ?? invoice.ksefReferenceNumber ?? '-'}</div>
                                     </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Sprzedawca</div>
+                                        <div className="truncate font-medium">{invoice.sellerName ?? '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">NIP</div>
+                                        <div className="font-mono text-xs">{invoice.sellerNip ?? '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Netto</div>
+                                        <div className="font-semibold text-green-700">{toNumber(invoice.netValue ?? invoice.totalNetAmount).toLocaleString()} zł</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">VAT</div>
+                                        <div className="font-semibold text-blue-700">{toNumber(invoice.vatValue ?? invoice.totalVatAmount).toLocaleString()} zł</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Rodzaj</div>
+                                        <Badge className="bg-slate-100 text-slate-800 hover:bg-slate-100">
+                                            {invoice.invoiceType ?? invoice.formType ?? '-'}
+                                        </Badge>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Data</div>
+                                        <div className="text-xs text-muted-foreground">{invoice.invoicingDate ?? invoice.acquisitionDate ?? '-'}</div>
+                                    </div>
+                                </div>
                                 ))}
                             </div>
-                        </div>
+                        )}
                     </CardContent>
                 </Card>
             </div>

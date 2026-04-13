@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\KsefCertificate;
 use App\Models\KsefProfile;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -39,6 +40,8 @@ class KsefService
     public function authenticate(string $type = 'offline', ?string $keyPassword = null): array
     {
         if ($this->getAuthMethod() === 'certificate') {
+            $keyPassword = $this->resolveKeyPassword($keyPassword);
+
             if ($keyPassword === null || $keyPassword === '') {
                 throw new \RuntimeException('Hasło do klucza prywatnego jest wymagane przy każdym połączeniu z KSeF.');
             }
@@ -46,7 +49,21 @@ class KsefService
             // Cache the password for this session (30 minutes)
             session()->put('ksef_password_' . $type, $keyPassword);
 
-            return $this->authenticateWithCertificate($type, $keyPassword);
+            try {
+                return $this->authenticateWithCertificate($type, $keyPassword);
+            } catch (\RuntimeException $e) {
+                $fallback = config('ksef.key_password');
+                $isDecryptError = str_contains($e->getMessage(), 'bad decrypt')
+                    || str_contains($e->getMessage(), 'pkcs12 cipherfinal error')
+                    || str_contains($e->getMessage(), 'Failed to load private key');
+
+                if ($isDecryptError && is_string($fallback) && $fallback !== '' && $fallback !== $keyPassword) {
+                    session()->put('ksef_password_' . $type, $fallback);
+                    return $this->authenticateWithCertificate($type, $fallback);
+                }
+
+                throw $e;
+            }
         }
 
         throw new \RuntimeException('Ta aplikacja wymaga uwierzytelniania do KSeF przy użyciu certyfikatu użytkownika.');
@@ -98,9 +115,13 @@ class KsefService
 
         $accessToken = $tokens['accessToken']['token'];
         $refreshToken = $tokens['refreshToken']['token'];
+        $validUntil = $tokens['accessToken']['validUntil'] ?? null;
 
         Cache::put($this->cacheKey($profileId, $type, 'access_token'), $accessToken, now()->addMinutes(30));
         Cache::put($this->cacheKey($profileId, $type, 'refresh_token'), $refreshToken, now()->addHours(23));
+        if (is_string($validUntil) && $validUntil !== '') {
+            Cache::put($this->cacheKey($profileId, $type, 'access_token_valid_until'), $validUntil, now()->addHours(23));
+        }
 
         $this->getProfile()->forceFill([
             'connected_at' => now(),
@@ -133,6 +154,10 @@ class KsefService
                 $result = $this->refreshAccessToken($refreshToken);
                 $newToken = $result['accessToken']['token'];
                 Cache::put($this->cacheKey($profileId, $type, 'access_token'), $newToken, now()->addMinutes(30));
+                $validUntil = $result['accessToken']['validUntil'] ?? null;
+                if (is_string($validUntil) && $validUntil !== '') {
+                    Cache::put($this->cacheKey($profileId, $type, 'access_token_valid_until'), $validUntil, now()->addHours(23));
+                }
                 return $newToken;
             } catch (\Exception $e) {
                 Log::warning('KSeF token refresh failed, re-authenticating', ['error' => $e->getMessage()]);
@@ -141,6 +166,30 @@ class KsefService
 
         // Full re-auth
         throw new \RuntimeException('Sesja KSeF wygasła. Połącz ponownie, podając hasło do klucza prywatnego.');
+    }
+
+    /**
+     * Keep KSeF session alive and return current token validity metadata.
+     */
+    public function keepAlive(?string $type = null): array
+    {
+        $profile = $this->getProfile();
+        $requestedType = $type;
+
+        if (!in_array($requestedType, ['offline', 'online'], true)) {
+            $requestedType = $profile->last_ksef_status['type'] ?? null;
+        }
+
+        if (!in_array($requestedType, ['offline', 'online'], true)) {
+            $requestedType = Cache::has($this->cacheKey($profile->id, 'online', 'access_token')) ? 'online' : 'offline';
+        }
+
+        $this->getAccessToken($requestedType);
+
+        return [
+            'type' => $requestedType,
+            'validUntil' => Cache::get($this->cacheKey($profile->id, $requestedType, 'access_token_valid_until')),
+        ];
     }
 
     // =============================================
@@ -491,7 +540,8 @@ class KsefService
     public function logout(): void
     {
         $profileId = $this->getProfile()->id;
-        $token = Cache::get($this->cacheKey($profileId, 'access_token'));
+        $token = Cache::get($this->cacheKey($profileId, 'offline', 'access_token'))
+            ?? Cache::get($this->cacheKey($profileId, 'online', 'access_token'));
         if (!$token) {
             return;
         }
@@ -504,8 +554,42 @@ class KsefService
             Log::warning('KSeF logout failed', ['error' => $e->getMessage()]);
         }
 
-        Cache::forget($this->cacheKey($profileId, 'access_token'));
-        Cache::forget($this->cacheKey($profileId, 'refresh_token'));
+        Cache::forget($this->cacheKey($profileId, 'offline', 'access_token'));
+        Cache::forget($this->cacheKey($profileId, 'offline', 'refresh_token'));
+        Cache::forget($this->cacheKey($profileId, 'offline', 'access_token_valid_until'));
+        Cache::forget($this->cacheKey($profileId, 'online', 'access_token'));
+        Cache::forget($this->cacheKey($profileId, 'online', 'refresh_token'));
+        Cache::forget($this->cacheKey($profileId, 'online', 'access_token_valid_until'));
+    }
+
+    /**
+     * Clear cached local KSeF session data (optionally for selected type only).
+     */
+    public function clearSession(?string $type = null): void
+    {
+        $profile = $this->getProfile();
+        $profileId = $profile->id;
+
+        $types = in_array($type, ['offline', 'online'], true) ? [$type] : ['offline', 'online'];
+
+        foreach ($types as $sessionType) {
+            Cache::forget($this->cacheKey($profileId, $sessionType, 'access_token'));
+            Cache::forget($this->cacheKey($profileId, $sessionType, 'refresh_token'));
+            Cache::forget($this->cacheKey($profileId, $sessionType, 'access_token_valid_until'));
+            session()->forget('ksef_password_' . $sessionType);
+        }
+
+        $lastStatus = $profile->last_ksef_status;
+        if (is_array($lastStatus) && array_key_exists('type', $lastStatus)) {
+            if (!in_array($lastStatus['type'], $types, true)) {
+                return;
+            }
+        }
+
+        $profile->forceFill([
+            'connected_at' => null,
+            'last_ksef_status' => null,
+        ])->save();
     }
 
     // =============================================
@@ -515,32 +599,51 @@ class KsefService
     /**
      * Search invoice metadata with filters.
      */
-    public function searchInvoices(array $filters, int $pageOffset = 0, int $pageSize = 50, string $sortOrder = 'Desc'): array
+    public function searchInvoices(array $filters, int $pageOffset = 0, int $pageSize = 50, string $sortOrder = 'Desc', string $type = 'offline'): array
     {
-        $token = $this->getAccessToken();
+        $cacheKey = $this->searchCacheKey($filters, $pageOffset, $pageSize, $sortOrder, $type);
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
 
-        $response = $this->client->post('invoices/query/metadata', [
-            'headers' => [
-                'Authorization' => "Bearer {$token}",
-                'Content-Type' => 'application/json',
-            ],
-            'query' => [
-                'pageOffset' => $pageOffset,
-                'pageSize' => $pageSize,
-                'sortOrder' => $sortOrder,
-            ],
-            'json' => $filters,
-        ]);
+        $token = $this->getAccessToken($type);
 
-        return json_decode($response->getBody()->getContents(), true);
+        try {
+            $response = $this->client->post('invoices/query/metadata', [
+                'headers' => [
+                    'Authorization' => "Bearer {$token}",
+                    'Content-Type' => 'application/json',
+                ],
+                'query' => [
+                    'pageOffset' => $pageOffset,
+                    'pageSize' => $pageSize,
+                    'sortOrder' => $sortOrder,
+                ],
+                'json' => $filters,
+            ]);
+        } catch (ClientException $e) {
+            if ($e->getResponse()?->getStatusCode() === 429 && is_array($cached)) {
+                return $cached;
+            }
+
+            throw $e;
+        }
+
+        $result = json_decode($response->getBody()->getContents(), true);
+        if (is_array($result)) {
+            Cache::put($cacheKey, $result, now()->addHour());
+        }
+
+        return $result;
     }
 
     /**
      * Get single invoice XML by KSeF number.
      */
-    public function getInvoiceByKsefNumber(string $ksefNumber): string
+    public function getInvoiceByKsefNumber(string $ksefNumber, string $type = 'offline'): string
     {
-        $token = $this->getAccessToken();
+        $token = $this->getAccessToken($type);
 
         $response = $this->client->get("invoices/ksef/{$ksefNumber}", [
             'headers' => [
@@ -652,12 +755,34 @@ class KsefService
 
         $authMethod = $profile?->auth_method ?? 'certificate';
         $nip = $profile?->nip;
+        $profileId = $profile?->id;
+
+        $sessionType = null;
+        $sessionValidUntil = null;
+        if ($profileId) {
+            $preferredType = $profile?->last_ksef_status['type'] ?? null;
+            $types = array_values(array_filter([$preferredType, 'online', 'offline']));
+
+            foreach ($types as $type) {
+                if (!in_array($type, ['offline', 'online'], true)) {
+                    continue;
+                }
+
+                if (Cache::has($this->cacheKey($profileId, $type, 'access_token'))) {
+                    $sessionType = $type;
+                    $sessionValidUntil = Cache::get($this->cacheKey($profileId, $type, 'access_token_valid_until'));
+                    break;
+                }
+            }
+        }
 
         return [
             'configured' => !empty($nip) && $offlineConfigured && $onlineConfigured,
             'offline_configured' => $offlineConfigured,
             'online_configured' => $onlineConfigured,
             'authenticated' => $profile ? $this->isAuthenticated() : false,
+            'session_type' => $sessionType,
+            'session_valid_until' => $sessionValidUntil,
             'nip' => $nip ? substr($nip, 0, 3) . '****' . substr($nip, -3) : null,
             'environment' => config('ksef.env'),
             'api_url' => $this->apiUrl,
@@ -677,7 +802,7 @@ class KsefService
             throw new \RuntimeException('Brak zalogowanego użytkownika dla połączenia z KSeF.');
         }
 
-        $profile = $user->ksefProfile()->with('activeCertificate')->first();
+        $profile = $user->ksefProfile()->with('offlineCertificate', 'onlineCertificate')->first();
 
         if (!$profile) {
             throw new \RuntimeException('Zalogowany użytkownik nie ma profilu KSeF.');
@@ -686,6 +811,19 @@ class KsefService
         $this->profile = $profile;
 
         return $profile;
+    }
+
+    private function searchCacheKey(array $filters, int $pageOffset, int $pageSize, string $sortOrder, string $type): string
+    {
+        $profileId = $this->getProfile()->id;
+
+        return 'ksef:invoice_search:' . $profileId . ':' . md5(json_encode([
+            'type' => $type,
+            'filters' => $filters,
+            'pageOffset' => $pageOffset,
+            'pageSize' => $pageSize,
+            'sortOrder' => $sortOrder,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     private function safeProfile(): ?KsefProfile
@@ -724,5 +862,19 @@ class KsefService
     private function cacheKey(int $profileId, string $type, string $suffix): string
     {
         return 'ksef:profile:' . $profileId . ':' . $type . ':' . $suffix;
+    }
+
+    private function resolveKeyPassword(?string $keyPassword): ?string
+    {
+        if (is_string($keyPassword) && $keyPassword !== '') {
+            return $keyPassword;
+        }
+
+        $fallback = config('ksef.key_password');
+        if (is_string($fallback) && $fallback !== '') {
+            return $fallback;
+        }
+
+        return null;
     }
 }

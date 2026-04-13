@@ -16,5 +16,9 @@ interface KsefWorkspaceServiceInterface
 
     public function storeCertificates(User $user, array $offlineFiles, array $onlineFiles): void;
 
+    public function updateCertificate(User $user, array $files, string $type): void;
+
+    public function deleteCertificate(User $user, string $type): void;
+
     public function ensureWorkspace(User $user): string;
 }

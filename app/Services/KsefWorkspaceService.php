@@ -52,12 +52,61 @@ class KsefWorkspaceService implements KsefWorkspaceServiceInterface
         $this->storeCertificateType($profile, $storagePath, $onlineFiles, 'online');
     }
 
+    public function updateCertificate(User $user, array $files, string $type): void
+    {
+        $profile = $this->findProfileForUser($user);
+
+        if (!$profile) {
+            throw new \RuntimeException('User does not have a KSeF profile.');
+        }
+
+        $storagePath = $this->ensureWorkspace($user);
+        $this->storeCertificateType($profile, $storagePath, $files, $type);
+    }
+
+    public function deleteCertificate(User $user, string $type): void
+    {
+        $profile = $this->findProfileForUser($user);
+
+        if (!$profile) {
+            throw new \RuntimeException('User does not have a KSeF profile.');
+        }
+
+        $certificates = $profile->certificates()
+            ->where('type', $type)
+            ->get();
+
+        foreach ($certificates as $certificate) {
+            Storage::disk('local')->delete(array_filter([
+                $certificate->cert_path,
+                $certificate->key_path,
+            ]));
+        }
+
+        $profile->certificates()
+            ->where('type', $type)
+            ->delete();
+    }
+
     private function storeCertificateType(KsefProfile $profile, string $storagePath, array $files, string $type): void
     {
         $certSourcePath = $files['cert_path'];
         $keySourcePath = $files['key_path'];
         $originalCertName = $files['cert_name'];
         $originalKeyName = $files['key_name'];
+
+        // Delete old files from disk before replacing
+        $oldCert = $profile->certificates()
+            ->where('type', $type)
+            ->where('active', true)
+            ->first();
+
+        if ($oldCert) {
+            Storage::disk('local')->delete(array_filter([
+                $oldCert->cert_path,
+                $oldCert->key_path,
+            ]));
+        }
 
         $certExtension = pathinfo($originalCertName, PATHINFO_EXTENSION) ?: 'crt';
         $keyExtension = pathinfo($originalKeyName, PATHINFO_EXTENSION) ?: 'key';
@@ -86,13 +135,21 @@ class KsefWorkspaceService implements KsefWorkspaceServiceInterface
             throw new \RuntimeException('User does not have a KSeF profile.');
         }
 
-        Storage::disk('local')->makeDirectory($profile->storage_path);
+        $storagePath = $this->buildStoragePath($user->id);
 
-        return $profile->storage_path;
+        if ($profile->storage_path !== $storagePath) {
+            $profile->forceFill([
+                'storage_path' => $storagePath,
+            ])->save();
+        }
+
+        Storage::disk('local')->makeDirectory($storagePath);
+
+        return $storagePath;
     }
 
     private function buildStoragePath(int $userId): string
     {
-        return 'ksef/users/' . $userId;
+        return 'ksef/certificate/users/' . $userId;
     }
 }

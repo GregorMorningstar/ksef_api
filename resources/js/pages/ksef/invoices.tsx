@@ -63,6 +63,59 @@ type SearchResult = {
     isTruncated: boolean;
 };
 
+type ParsedInvoicePreview = {
+    sellerName: string;
+    sellerNip: string;
+    buyerName: string;
+    buyerNip: string;
+    issueDate: string;
+    paymentDueDate: string;
+    net: string;
+    vat: string;
+    gross: string;
+};
+
+const extractTextByLocalName = (xmlDoc: Document, names: string[]): string => {
+    const all = Array.from(xmlDoc.getElementsByTagName('*'));
+    for (const node of all) {
+        if (names.includes(node.localName)) {
+            const value = node.textContent?.trim();
+            if (value) return value;
+        }
+    }
+    return '-';
+};
+
+const parseInvoicePreview = (xml: string): ParsedInvoicePreview => {
+    try {
+        const doc = new DOMParser().parseFromString(xml, 'application/xml');
+
+        return {
+            sellerName: extractTextByLocalName(doc, ['SellerName', 'SprzedawcaNazwa', 'P_3A', 'Nazwa']),
+            sellerNip: extractTextByLocalName(doc, ['SellerIdentifier', 'SprzedawcaNIP', 'P_5B', 'NIP']),
+            buyerName: extractTextByLocalName(doc, ['BuyerName', 'NabywcaNazwa', 'P_3B', 'Nazwa']),
+            buyerNip: extractTextByLocalName(doc, ['BuyerIdentifier', 'NabywcaNIP', 'P_5A', 'NIP']),
+            issueDate: extractTextByLocalName(doc, ['IssueDate', 'DataWystawienia', 'P_1']),
+            paymentDueDate: extractTextByLocalName(doc, ['PaymentDueDate', 'TerminPlatnosci', 'P_6']),
+            net: extractTextByLocalName(doc, ['TotalNet', 'Netto', 'P_13_1']),
+            vat: extractTextByLocalName(doc, ['TotalVat', 'VAT', 'P_14_1']),
+            gross: extractTextByLocalName(doc, ['TotalGross', 'Brutto', 'P_15']),
+        };
+    } catch {
+        return {
+            sellerName: '-',
+            sellerNip: '-',
+            buyerName: '-',
+            buyerNip: '-',
+            issueDate: '-',
+            paymentDueDate: '-',
+            net: '-',
+            vat: '-',
+            gross: '-',
+        };
+    }
+};
+
 export default function KsefInvoices({ status: initialStatus }: { status: KsefStatus }) {
     const [status, setStatus] = useState<KsefStatus>(initialStatus);
     const [loading, setLoading] = useState(false);
@@ -73,6 +126,8 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [xmlPreview, setXmlPreview] = useState<string | null>(null);
     const [previewKsef, setPreviewKsef] = useState<string | null>(null);
+    const [previewMeta, setPreviewMeta] = useState<InvoiceMetadata | null>(null);
+    const [previewParsed, setPreviewParsed] = useState<ParsedInvoicePreview | null>(null);
 
     // Search form state
     const [dateFrom, setDateFrom] = useState(() => {
@@ -87,6 +142,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
     const [invoiceNumber, setInvoiceNumber] = useState('');
     const [pageOffset, setPageOffset] = useState(0);
     const [keyPassword, setKeyPassword] = useState('');
+    const [authType, setAuthType] = useState<'offline' | 'online'>('online');
 
     const clearMessages = () => {
         setError(null);
@@ -106,7 +162,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                     'X-CSRF-TOKEN':
                         document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
                 },
-                body: JSON.stringify({ key_password: keyPassword }),
+                body: JSON.stringify({ type: authType, key_password: keyPassword }),
             });
             const text = await res.text();
             let data: { success?: boolean; message?: string };
@@ -128,7 +184,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
         } finally {
             setAuthLoading(false);
         }
-    }, []);
+    }, [authType, keyPassword]);
 
     const handleLogout = useCallback(async () => {
         clearMessages();
@@ -160,6 +216,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
             setPageOffset(offset);
             try {
                 const body: Record<string, unknown> = {
+                    type: authType,
                     dateFrom,
                     dateTo,
                     subjectType,
@@ -195,12 +252,14 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                 setLoading(false);
             }
         },
-        [dateFrom, dateTo, subjectType, sellerNip, ksefNumber, invoiceNumber],
+        [authType, dateFrom, dateTo, subjectType, sellerNip, ksefNumber, invoiceNumber],
     );
 
-    const handlePreview = useCallback(async (ksefNum: string) => {
+    const handlePreview = useCallback(async (invoice: InvoiceMetadata) => {
+        const ksefNum = invoice.ksefNumber;
+        if (!ksefNum) return;
         try {
-            const res = await fetch(`/ksef/invoices/${encodeURIComponent(ksefNum)}`, {
+            const res = await fetch(`/ksef/invoices/${encodeURIComponent(ksefNum)}?type=${authType}`, {
                 headers: {
                     'X-CSRF-TOKEN':
                         document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
@@ -209,14 +268,16 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
             const text = await res.text();
             setXmlPreview(text);
             setPreviewKsef(ksefNum);
+            setPreviewMeta(invoice);
+            setPreviewParsed(parseInvoicePreview(text));
         } catch {
             setError('Błąd podglądu faktury');
         }
-    }, []);
+    }, [authType]);
 
     const handleDownload = useCallback((ksefNum: string) => {
-        window.open(`/ksef/invoices/${encodeURIComponent(ksefNum)}/download`, '_blank');
-    }, []);
+        window.open(`/ksef/invoices/${encodeURIComponent(ksefNum)}/download?type=${authType}`, '_blank');
+    }, [authType]);
 
     return (
         <>
@@ -282,19 +343,42 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                     )}
                     {!status.authenticated && status.configured && (
                         <CardContent className="pt-0">
-                            <div className="grid gap-2 md:max-w-sm">
-                                <Label htmlFor="keyPassword">Hasło do klucza prywatnego</Label>
+                            <div className="grid gap-2 md:max-w-xl">
+                                <div className="grid gap-1.5 md:grid-cols-2 md:gap-3">
+                                    <div className="grid gap-1">
+                                        <Label>Typ certyfikatu</Label>
+                                        <Select value={authType} onValueChange={(v: 'offline' | 'online') => setAuthType(v)}>
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="offline">Offline</SelectItem>
+                                                <SelectItem value="online">Online</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="grid gap-1">
+                                        <Label htmlFor="keyPassword">Hasło do klucza prywatnego</Label>
+                                        <div className="relative flex-1">
+                                            <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                            <Input
+                                                id="keyPassword"
+                                                type="password"
+                                                value={keyPassword}
+                                                onChange={(e) => setKeyPassword(e.target.value)}
+                                                className="pl-9"
+                                                placeholder="Podaj hasło do klucza"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="text-xs text-muted-foreground">Podgląd i pobieranie faktur działa dla wybranego typu sesji ({authType}).</div>
                                 <div className="flex gap-2">
                                     <div className="relative flex-1">
-                                        <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                                        <Input
-                                            id="keyPassword"
-                                            type="password"
-                                            value={keyPassword}
-                                            onChange={(e) => setKeyPassword(e.target.value)}
-                                            className="pl-9"
-                                            placeholder="Podaj hasło do klucza"
-                                        />
+                                        <Button size="sm" onClick={handleAuth} disabled={authLoading || !keyPassword}>
+                                            {authLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <LogIn className="mr-1 h-4 w-4" />}
+                                            Połącz ({authType})
+                                        </Button>
                                     </div>
                                 </div>
                             </div>
@@ -490,9 +574,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                                                                 <Button
                                                                     variant="ghost"
                                                                     size="sm"
-                                                                    onClick={() =>
-                                                                        handlePreview(inv.ksefNumber!)
-                                                                    }
+                                                                    onClick={() => handlePreview(inv)}
                                                                     title="Podgląd XML"
                                                                 >
                                                                     <FileText className="h-4 w-4" />
@@ -553,6 +635,38 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                             </div>
                         </CardHeader>
                         <CardContent>
+                            {previewMeta && previewParsed && (
+                                <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-2">
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Sprzedawca</div>
+                                        <div className="font-semibold">{previewMeta.sellerName ?? previewParsed.sellerName}</div>
+                                        <div className="font-mono text-xs">NIP: {previewMeta.sellerNip ?? previewParsed.sellerNip}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Nabywca</div>
+                                        <div className="font-semibold">{previewMeta.buyerName ?? previewParsed.buyerName}</div>
+                                        <div className="font-mono text-xs">NIP: {previewMeta.buyerNip ?? previewParsed.buyerNip}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Numer faktury</div>
+                                        <div>{previewMeta.invoiceNumber ?? '-'}</div>
+                                        <div className="text-xs text-muted-foreground">Data: {previewMeta.invoicingDate ?? previewParsed.issueDate}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Płatność</div>
+                                        <div>Termin: {previewParsed.paymentDueDate}</div>
+                                        <div className="text-xs text-muted-foreground">Typ: {previewMeta.invoiceType ?? previewMeta.formType ?? '-'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">Netto</div>
+                                        <div className="font-semibold">{previewMeta.netValue ?? previewParsed.net} {previewMeta.currency ?? 'PLN'}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-xs text-muted-foreground">VAT / Brutto</div>
+                                        <div className="font-semibold">{previewMeta.vatValue ?? previewParsed.vat} / {previewMeta.grossValue ?? previewParsed.gross} {previewMeta.currency ?? 'PLN'}</div>
+                                    </div>
+                                </div>
+                            )}
                             <pre className="max-h-[500px] overflow-auto rounded-md bg-muted p-4 text-xs">
                                 {xmlPreview}
                             </pre>
