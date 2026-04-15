@@ -16,9 +16,9 @@ use Inertia\Response;
 class KsefController extends Controller
 {
     public function __construct(
-        private KsefService $ksef,
-        private KsefInvoiceService $invoiceService,
-        private KsefWorkspaceServiceInterface $workspaceService,
+        private readonly KsefService $ksef,
+        private readonly KsefInvoiceService $invoiceService,
+        private readonly KsefWorkspaceServiceInterface $workspaceService,
     ) {}
 
     /**
@@ -66,7 +66,7 @@ class KsefController extends Controller
     {
         $filters = $request->validated();
         $paginator = $this->invoiceService->paginateForUser($request->user(), $filters);
-
+//dd($paginator);
         return Inertia::render('ksef/my-invoices', [
             'filters' => [
                 'dateFrom' => $filters['dateFrom'] ?? null,
@@ -164,39 +164,16 @@ class KsefController extends Controller
                 ],
             ];
             try {
-                $result = $this->ksef->searchInvoices($filters, 0, 100, 'Desc', $type);
-                if (!empty($result['invoices'])) {
-                    foreach ($result['invoices'] as $inv) {
-                        \App\Models\KsefInvoice::updateOrCreate(
-                            [
-                                'user_id' => $user->id,
-                                'ksef_id' => $inv['ksefReferenceNumber'],
-                            ],
-                            [
-                                'reference_number' => $inv['referenceNumber'] ?? null,
-                                'number' => $inv['invoiceNumber'] ?? null,
-                                'issue_date' => $inv['invoiceIssueDate'] ?? null,
-                                'sale_date' => $inv['invoiceSaleDate'] ?? null,
-                                'due_date' => $inv['paymentDueDate'] ?? null,
-                                'buyer_nip' => $inv['buyerNip'] ?? null,
-                                'buyer_name' => $inv['buyerName'] ?? null,
-                                'buyer_address' => $inv['buyerAddress'] ?? null,
-                                'seller_nip' => $inv['sellerNip'] ?? null,
-                                'seller_name' => $inv['sellerName'] ?? null,
-                                'seller_address' => $inv['sellerAddress'] ?? null,
-                                'total_gross' => $inv['totalGrossAmount'] ?? null,
-                                'total_net' => $inv['totalNetAmount'] ?? null,
-                                'total_vat' => $inv['totalVatAmount'] ?? null,
-                                'currency' => $inv['currency'] ?? null,
-                                'status' => 'new',
-                                'raw_json' => json_encode($inv),
-                            ]
-                        );
-                    }
-                }
+                $this->invoiceService->syncFromKsefForUser($user, $filters, $type, 0, 100);
             } catch (\Throwable $syncError) {
+                $syncBody = null;
+                if ($syncError instanceof ClientException && $syncError->getResponse()) {
+                    $syncBody = $syncError->getResponse()->getBody()->getContents();
+                }
+
                 Log::warning('KSeF invoice sync after auth failed', [
                     'error' => $syncError->getMessage(),
+                    'body' => $syncBody,
                     'type' => $type,
                     'user_id' => $user->id,
                 ]);
@@ -328,9 +305,19 @@ class KsefController extends Controller
 
             return response()->json($result);
         } catch (ClientException $e) {
+            $body = $e->getResponse()?->getBody()->getContents() ?? '';
+            $parsed = json_decode($body, true);
+            $detail = $parsed['status']['description']
+                ?? $parsed['message']
+                ?? $parsed['exception']['exceptionDetailList'][0]['exceptionDescription']
+                ?? $e->getMessage();
+
+            $apiDetails = $parsed['exception']['exceptionDetailList'][0]['details'] ?? [];
+            if (is_array($apiDetails) && $apiDetails !== []) {
+                $detail .= ' ' . implode(' ', $apiDetails);
+            }
+
             if ($e->getResponse()?->getStatusCode() === 429) {
-                $body = $e->getResponse()->getBody()->getContents();
-                $parsed = json_decode($body, true);
                 $details = $parsed['status']['details'] ?? [];
                 $detailText = is_array($details) && $details !== []
                     ? ' ' . implode(' ', $details)
@@ -347,6 +334,156 @@ class KsefController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'error' => 'Błąd wyszukiwania: ' . $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Fetch invoices from KSeF, save in DB and return paginated DB results.
+     */
+    public function checkInvoices(Request $request): JsonResponse
+    {
+        $request->validate([
+            'type' => 'nullable|in:offline,online',
+            'dateFrom' => 'required|date',
+            'dateTo' => 'required|date|after_or_equal:dateFrom',
+            'subjectType' => 'required|in:Subject1,Subject2,Subject3,SubjectAuthorized',
+            'pageOffset' => 'integer|min:0',
+            'pageSize' => 'integer|min:10|max:250',
+            'search' => 'nullable|string|max:190',
+            'kind' => 'nullable|string|max:80',
+            'page' => 'nullable|integer|min:1',
+            'perPage' => 'nullable|integer|min:10|max:100',
+        ]);
+
+        try {
+            $filters = [
+                'subjectType' => $request->input('subjectType', 'Subject1'),
+                'dateRange' => [
+                    'dateType' => 'Invoicing',
+                    'from' => $request->input('dateFrom') . 'T00:00:00+00:00',
+                    'to' => $request->input('dateTo') . 'T23:59:59+00:00',
+                ],
+            ];
+
+            if ($request->filled('sellerNip')) {
+                $filters['sellerNip'] = $request->input('sellerNip');
+            }
+
+            if ($request->filled('ksefNumber')) {
+                $filters['ksefNumber'] = $request->input('ksefNumber');
+            }
+
+            if ($request->filled('invoiceNumber')) {
+                $filters['invoiceNumber'] = $request->input('invoiceNumber');
+            }
+
+            $sync = $this->invoiceService->syncFromKsefForUser(
+                $request->user(),
+                $filters,
+                $request->input('type', 'online'),
+                (int) $request->input('pageOffset', 0),
+                (int) $request->input('pageSize', 50),
+            );
+
+            $dbFilters = [
+                'dateFrom' => $request->input('dateFrom'),
+                'dateTo' => $request->input('dateTo'),
+                'kind' => $request->input('kind'),
+                'search' => $request->input('search') ?: ($request->input('invoiceNumber') ?? $request->input('ksefNumber')),
+                'perPage' => (int) $request->input('perPage', $request->input('pageSize', 20)),
+                'page' => (int) $request->input('page', 1),
+            ];
+
+            $paginator = $this->invoiceService->paginateForUser($request->user(), $dbFilters);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Faktury pobrane i zapisane w bazie.',
+                'synced' => $sync,
+                'data' => $paginator->items(),
+                'currentPage' => $paginator->currentPage(),
+                'lastPage' => $paginator->lastPage(),
+                'perPage' => $paginator->perPage(),
+                'total' => $paginator->total(),
+            ]);
+        } catch (ClientException $e) {
+            if ($e->getResponse()?->getStatusCode() === 429) {
+                $body = $e->getResponse()->getBody()->getContents();
+                $parsed = json_decode($body, true);
+                $details = $parsed['status']['details'] ?? [];
+                $detailText = is_array($details) && $details !== []
+                    ? ' ' . implode(' ', $details)
+                    : '';
+
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Limit zapytań KSeF został przekroczony. Możesz wykonać maksymalnie 20 wyszukań na godzinę.' . $detailText,
+                ], 429);
+            }
+
+            return response()->json([
+                'success' => false,
+                'error' => 'Błąd pobierania faktur: ' . $detail,
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Błąd pobierania faktur: ' . $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Fetch only new invoices (since last sync) and save to DB.
+     */
+    public function checkNewInvoices(Request $request): JsonResponse
+    {
+        $request->validate([
+            'type' => 'nullable|in:offline,online',
+        ]);
+
+        try {
+            $sync = $this->invoiceService->syncNewInvoicesForUser(
+                $request->user(),
+                $request->input('type', 'online'),
+                100,
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Nowe faktury pobrane.',
+                'synced' => $sync,
+                'newCount' => $sync['saved'],
+            ]);
+        } catch (ClientException $e) {
+            $body = $e->getResponse()?->getBody()->getContents() ?? '';
+            $parsed = json_decode($body, true);
+            $detail = $parsed['status']['description']
+                ?? $parsed['message']
+                ?? $parsed['exception']['exceptionDetailList'][0]['exceptionDescription']
+                ?? $e->getMessage();
+
+            $apiDetails = $parsed['exception']['exceptionDetailList'][0]['details'] ?? [];
+            if (is_array($apiDetails) && $apiDetails !== []) {
+                $detail .= ' ' . implode(' ', $apiDetails);
+            }
+
+            if ($e->getResponse()?->getStatusCode() === 429) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Limit zapytań KSeF został przekroczony. Możesz wykonać maksymalnie 20 wyszukań na godzinę.',
+                ], 429);
+            }
+
+            return response()->json([
+                'success' => false,
+                'error' => 'Błąd pobierania nowych faktur: ' . $detail,
+            ], 422);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Błąd pobierania nowych faktur: ' . $e->getMessage(),
             ], 422);
         }
     }

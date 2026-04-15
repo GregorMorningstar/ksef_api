@@ -23,6 +23,7 @@ class KsefCertificateController extends Controller
     public function create(): Response
     {
         $profile = $this->workspaceService->findProfileForUser(request()->user());
+    //    dd($profile);
         $offline = $profile?->offlineCertificate;
         $online = $profile?->onlineCertificate;
 

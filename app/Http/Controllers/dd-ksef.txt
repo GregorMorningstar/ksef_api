@@ -1,0 +1,411 @@
+Illuminate\Pagination\LengthAwarePaginator {#1632 ▼ // app\Http\Controllers\KsefController.php:69
+  #items: 
+Illuminate\Database\Eloquent
+\
+Collection
+ {#1624 ▼
+    #items: array:20 [▼
+      0 => 
+App\Models
+\
+KsefInvoice
+ {#1623 ▼
+        #connection: "mysql"
+        #table: "ksef_invoices"
+        #primaryKey: "id"
+        #keyType: "int"
+        +incrementing: true
+        #with: []
+        #withCount: []
+        +preventsLazyLoading: false
+        #perPage: 15
+        +exists: true
+        +wasRecentlyCreated: false
+        #escapeWhenCastingToString: false
+        #attributes: array:38 [▼
+          "id" => 5
+          "user_id" => 1
+          "ksef_id" => "6842465760-20260415-3E4B69C00001-E9"
+          "reference_number" => null
+          "number" => "FS/CP/35/04/2026"
+          "issue_date" => "2026-04-15"
+          "invoicing_date" => "2026-04-15 06:51:34"
+          "acquisition_date" => "2026-04-15 06:51:34"
+          "permanent_storage_date" => "2026-04-15 06:51:35"
+          "sale_date" => null
+          "due_date" => null
+          "payment_date" => null
+          "expected_payment_date" => null
+          "payment_status" => "oczekuje"
+          "buyer_nip" => "6842517043"
+          "buyer_name" => "WRW SPÓŁKA CYWILNA JUCHA ,URBANEK,BLICHARCZYK"
+          "buyer_address" => null
+          "buyer_identifier_type" => "Nip"
+          "buyer_identifier_value" => "6842517043"
+          "seller_nip" => "6842465760"
+          "seller_name" => "KOBO SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "seller_address" => null
+          "total_gross" => "100.00"
+          "total_net" => "81.30"
+          "total_vat" => "18.70"
+          "currency" => "PLN"
+          "invoicing_mode" => "Online"
+          "invoice_type" => "Vat"
+          "form_code_system_code" => "FA (3)"
+          "form_code_schema_version" => "1-0E"
+          "form_code_value" => "FA"
+          "is_self_invoicing" => 0
+          "has_attachment" => 0
+          "invoice_hash" => "KzcD1HBMg7UFEEnosF7OjHpAFchHe0Hb6YeZPRsTQ1M="
+          "status" => "new"
+          "raw_json" => "{"buyer": {"name": "WRW SPÓŁKA CYWILNA JUCHA ,URBANEK,BLICHARCZYK", "identifier": {"type": "Nip", "value": "6842517043"}}, "seller": {"nip": "6842465760", "name ▶"
+          "created_at" => "2026-04-15 15:32:05"
+          "updated_at" => "2026-04-15 16:05:47"
+        ]
+        #original: array:38 [▼
+          "id" => 5
+          "user_id" => 1
+          "ksef_id" => "6842465760-20260415-3E4B69C00001-E9"
+          "reference_number" => null
+          "number" => "FS/CP/35/04/2026"
+          "issue_date" => "2026-04-15"
+          "invoicing_date" => "2026-04-15 06:51:34"
+          "acquisition_date" => "2026-04-15 06:51:34"
+          "permanent_storage_date" => "2026-04-15 06:51:35"
+          "sale_date" => null
+          "due_date" => null
+          "payment_date" => null
+          "expected_payment_date" => null
+          "payment_status" => "oczekuje"
+          "buyer_nip" => "6842517043"
+          "buyer_name" => "WRW SPÓŁKA CYWILNA JUCHA ,URBANEK,BLICHARCZYK"
+          "buyer_address" => null
+          "buyer_identifier_type" => "Nip"
+          "buyer_identifier_value" => "6842517043"
+          "seller_nip" => "6842465760"
+          "seller_name" => "KOBO SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "seller_address" => null
+          "total_gross" => "100.00"
+          "total_net" => "81.30"
+          "total_vat" => "18.70"
+          "currency" => "PLN"
+          "invoicing_mode" => "Online"
+          "invoice_type" => "Vat"
+          "form_code_system_code" => "FA (3)"
+          "form_code_schema_version" => "1-0E"
+          "form_code_value" => "FA"
+          "is_self_invoicing" => 0
+          "has_attachment" => 0
+          "invoice_hash" => "KzcD1HBMg7UFEEnosF7OjHpAFchHe0Hb6YeZPRsTQ1M="
+          "status" => "new"
+          "raw_json" => "{"buyer": {"name": "WRW SPÓŁKA CYWILNA JUCHA ,URBANEK,BLICHARCZYK", "identifier": {"type": "Nip", "value": "6842517043"}}, "seller": {"nip": "6842465760", "name ▶"
+          "created_at" => "2026-04-15 15:32:05"
+          "updated_at" => "2026-04-15 16:05:47"
+        ]
+        #changes: []
+        #previous: []
+        #casts: array:11 [▼
+          "issue_date" => "date"
+          "invoicing_date" => "datetime"
+          "acquisition_date" => "datetime"
+          "permanent_storage_date" => "datetime"
+          "sale_date" => "date"
+          "due_date" => "date"
+          "payment_date" => "date"
+          "expected_payment_date" => "date"
+          "is_self_invoicing" => "boolean"
+          "has_attachment" => "boolean"
+          "raw_json" => "array"
+        ]
+        #classCastCache: []
+        #attributeCastCache: []
+        #dateFormat: null
+        #appends: []
+        #dispatchesEvents: []
+        #observables: []
+        #relations: []
+        #touches: []
+        #relationAutoloadCallback: null
+        #relationAutoloadContext: null
+        +timestamps: true
+        +usesUniqueIds: false
+        #hidden: []
+        #visible: []
+        #fillable: array:35 [▶]
+        #guarded: array:1 [▶]
+      }
+      1 => 
+App\Models
+\
+KsefInvoice
+ {#1622 ▼
+        #connection: "mysql"
+        #table: "ksef_invoices"
+        #primaryKey: "id"
+        #keyType: "int"
+        +incrementing: true
+        #with: []
+        #withCount: []
+        +preventsLazyLoading: false
+        #perPage: 15
+        +exists: true
+        +wasRecentlyCreated: false
+        #escapeWhenCastingToString: false
+        #attributes: array:38 [▼
+          "id" => 4
+          "user_id" => 1
+          "ksef_id" => "6842465760-20260415-3EBBD2800005-BD"
+          "reference_number" => null
+          "number" => "FS/CP/36/04/2026"
+          "issue_date" => "2026-04-15"
+          "invoicing_date" => "2026-04-15 06:55:19"
+          "acquisition_date" => "2026-04-15 06:55:19"
+          "permanent_storage_date" => "2026-04-15 06:55:20"
+          "sale_date" => null
+          "due_date" => null
+          "payment_date" => null
+          "expected_payment_date" => null
+          "payment_status" => "oczekuje"
+          "buyer_nip" => "5342169325"
+          "buyer_name" => "MAN TRUCK & BUS POLSKA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "buyer_address" => null
+          "buyer_identifier_type" => "Nip"
+          "buyer_identifier_value" => "5342169325"
+          "seller_nip" => "6842465760"
+          "seller_name" => "KOBO SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "seller_address" => null
+          "total_gross" => "140.00"
+          "total_net" => "113.82"
+          "total_vat" => "26.18"
+          "currency" => "PLN"
+          "invoicing_mode" => "Online"
+          "invoice_type" => "Vat"
+          "form_code_system_code" => "FA (3)"
+          "form_code_schema_version" => "1-0E"
+          "form_code_value" => "FA"
+          "is_self_invoicing" => 0
+          "has_attachment" => 0
+          "invoice_hash" => "8AhkEz9memgwVjqy+W+V/MlmleQK9822nGzRY7i4vuU="
+          "status" => "new"
+          "raw_json" => "{"buyer": {"name": "MAN TRUCK & BUS POLSKA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "identifier": {"type": "Nip", "value": "5342169325"}}, "seller": {"nip": "6 ▶"
+          "created_at" => "2026-04-15 15:32:05"
+          "updated_at" => "2026-04-15 16:05:47"
+        ]
+        #original: array:38 [▼
+          "id" => 4
+          "user_id" => 1
+          "ksef_id" => "6842465760-20260415-3EBBD2800005-BD"
+          "reference_number" => null
+          "number" => "FS/CP/36/04/2026"
+          "issue_date" => "2026-04-15"
+          "invoicing_date" => "2026-04-15 06:55:19"
+          "acquisition_date" => "2026-04-15 06:55:19"
+          "permanent_storage_date" => "2026-04-15 06:55:20"
+          "sale_date" => null
+          "due_date" => null
+          "payment_date" => null
+          "expected_payment_date" => null
+          "payment_status" => "oczekuje"
+          "buyer_nip" => "5342169325"
+          "buyer_name" => "MAN TRUCK & BUS POLSKA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "buyer_address" => null
+          "buyer_identifier_type" => "Nip"
+          "buyer_identifier_value" => "5342169325"
+          "seller_nip" => "6842465760"
+          "seller_name" => "KOBO SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"
+          "seller_address" => null
+          "total_gross" => "140.00"
+          "total_net" => "113.82"
+          "total_vat" => "26.18"
+          "currency" => "PLN"
+          "invoicing_mode" => "Online"
+          "invoice_type" => "Vat"
+          "form_code_system_code" => "FA (3)"
+          "form_code_schema_version" => "1-0E"
+          "form_code_value" => "FA"
+          "is_self_invoicing" => 0
+          "has_attachment" => 0
+          "invoice_hash" => "8AhkEz9memgwVjqy+W+V/MlmleQK9822nGzRY7i4vuU="
+          "status" => "new"
+          "raw_json" => "{"buyer": {"name": "MAN TRUCK & BUS POLSKA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "identifier": {"type": "Nip", "value": "5342169325"}}, "seller": {"nip": "6 ▶"
+          "created_at" => "2026-04-15 15:32:05"
+          "updated_at" => "2026-04-15 16:05:47"
+        ]
+        #changes: []
+        #previous: []
+        #casts: array:11 [▼
+          "issue_date" => "date"
+          "invoicing_date" => "datetime"
+          "acquisition_date" => "datetime"
+          "permanent_storage_date" => "datetime"
+          "sale_date" => "date"
+          "due_date" => "date"
+          "payment_date" => "date"
+          "expected_payment_date" => "date"
+          "is_self_invoicing" => "boolean"
+          "has_attachment" => "boolean"
+          "raw_json" => "array"
+        ]
+        #classCastCache: []
+        #attributeCastCache: []
+        #dateFormat: null
+        #appends: []
+        #dispatchesEvents: []
+        #observables: []
+        #relations: []
+        #touches: []
+        #relationAutoloadCallback: null
+        #relationAutoloadContext: null
+        +timestamps: true
+        +usesUniqueIds: false
+        #hidden: []
+        #visible: []
+        #fillable: array:35 [▼
+          0 => "user_id"
+          1 => "ksef_id"
+          2 => "reference_number"
+          3 => "number"
+          4 => "issue_date"
+          5 => "invoicing_date"
+          6 => "acquisition_date"
+          7 => "permanent_storage_date"
+          8 => "sale_date"
+          9 => "due_date"
+          10 => "payment_date"
+          11 => "expected_payment_date"
+          12 => "payment_status"
+          13 => "buyer_nip"
+          14 => "buyer_name"
+          15 => "buyer_address"
+          16 => "buyer_identifier_type"
+          17 => "buyer_identifier_value"
+          18 => "seller_nip"
+          19 => "seller_name"
+          20 => "seller_address"
+          21 => "total_gross"
+          22 => "total_net"
+          23 => "total_vat"
+          24 => "currency"
+          25 => "invoicing_mode"
+          26 => "invoice_type"
+          27 => "form_code_system_code"
+          28 => "form_code_schema_version"
+          29 => "form_code_value"
+          30 => "is_self_invoicing"
+          31 => "has_attachment"
+          32 => "invoice_hash"
+          33 => "status"
+          34 => "raw_json"
+        ]
+        #guarded: array:1 [▼
+          0 => "*"
+        ]
+      }
+      2 => 
+App\Models
+\
+KsefInvoice
+ {#1621 ▶}
+      3 => 
+App\Models
+\
+KsefInvoice
+ {#1620 ▶}
+      4 => 
+App\Models
+\
+KsefInvoice
+ {#1619 ▶}
+      5 => 
+App\Models
+\
+KsefInvoice
+ {#1618 ▶}
+      6 => 
+App\Models
+\
+KsefInvoice
+ {#1617 ▶}
+      7 => 
+App\Models
+\
+KsefInvoice
+ {#1616 ▶}
+      8 => 
+App\Models
+\
+KsefInvoice
+ {#1615 ▶}
+      9 => 
+App\Models
+\
+KsefInvoice
+ {#1614 ▶}
+      10 => 
+App\Models
+\
+KsefInvoice
+ {#1613 ▶}
+      11 => 
+App\Models
+\
+KsefInvoice
+ {#1612 ▶}
+      12 => 
+App\Models
+\
+KsefInvoice
+ {#1611 ▶}
+      13 => 
+App\Models
+\
+KsefInvoice
+ {#1610 ▶}
+      14 => 
+App\Models
+\
+KsefInvoice
+ {#1609 ▶}
+      15 => 
+App\Models
+\
+KsefInvoice
+ {#1608 ▶}
+      16 => 
+App\Models
+\
+KsefInvoice
+ {#1607 ▶}
+      17 => 
+App\Models
+\
+KsefInvoice
+ {#1606 ▶}
+      18 => 
+App\Models
+\
+KsefInvoice
+ {#1605 ▶}
+      19 => 
+App\Models
+\
+KsefInvoice
+ {#1604 ▶}
+    ]
+    #escapeWhenCastingToString: false
+  }
+  #perPage: 20
+  #currentPage: 1
+  #path: "http://localhost:8000/ksef/my-invoices"
+  #query: []
+  #fragment: null
+  #pageName: "page"
+  #escapeWhenCastingToString: false
+  +onEachSide: 3
+  #options: array:2 [▼
+    "path" => "http://localhost:8000/ksef/my-invoices"
+    "pageName" => "page"
+  ]
+  #total: 41
+  #lastPage: 3
+}

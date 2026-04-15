@@ -18,7 +18,7 @@ class KsefMyInvoicesRequest extends FormRequest
             'dateTo' => ['nullable', 'date', 'after_or_equal:dateFrom'],
             'kind' => ['nullable', 'string', 'max:80'],
             'search' => ['nullable', 'string', 'max:190'],
-            'perPage' => ['nullable', 'integer', 'min:10', 'max:100'],
+            'perPage' => ['nullable', 'integer', 'min:1', 'max:100'],
             'page' => ['nullable', 'integer', 'min:1'],
         ];
     }

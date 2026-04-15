@@ -29,6 +29,8 @@ Route::middleware(['auth', 'verified', 'ksef.certificate'])->group(function () {
         Route::post('/logout', [KsefController::class, 'logout'])->name('logout');
         Route::post('/session/clear', [KsefController::class, 'clearSession'])->name('session.clear');
         Route::post('/invoices/search', [KsefController::class, 'searchInvoices'])->name('invoices.search');
+        Route::post('/invoices/check', [KsefController::class, 'checkInvoices'])->name('invoices.check');
+        Route::post('/invoices/check-new', [KsefController::class, 'checkNewInvoices'])->name('invoices.check-new');
         Route::get('/my-invoices', [KsefController::class, 'myInvoices'])->name('my-invoices');
         Route::get('/my-invoices/data', [KsefController::class, 'myInvoicesData'])->name('my-invoices.data');
         Route::get('/invoices/{ksefNumber}', [KsefController::class, 'getInvoice'])->name('invoices.show');

@@ -4,8 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Search } from 'lucide-react';
+import { Search, Eye, ChevronRight, Download } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Link } from '@inertiajs/react';
 
 type Invoice = {
     id: number;
@@ -48,6 +50,23 @@ const toAmount = (value: number | string | null | undefined) => {
     return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const formatDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '-';
+    try {
+        const date = new Date(dateStr);
+        if (Number.isNaN(date.getTime())) return '-';
+        return new Intl.DateTimeFormat('pl-PL', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        }).format(date);
+    } catch {
+        return '-';
+    }
+};
+
 export default function MyInvoicesPage({ filters, invoices }: Props) {
     const [dateFrom, setDateFrom] = useState(filters.dateFrom ?? '');
     const [dateTo, setDateTo] = useState(filters.dateTo ?? '');
@@ -68,7 +87,7 @@ export default function MyInvoicesPage({ filters, invoices }: Props) {
                 dateTo: dateTo || undefined,
                 kind: kind || undefined,
                 search: search || undefined,
-                perPage: filters.perPage || 20,
+                perPage: 9, // Changed from 20 to 9 (3x3 card grid)
             },
             { preserveScroll: true }
         );
@@ -82,7 +101,7 @@ export default function MyInvoicesPage({ filters, invoices }: Props) {
                 dateTo: dateTo || undefined,
                 kind: kind || undefined,
                 search: search || undefined,
-                perPage: filters.perPage || 20,
+                perPage: 9, // Changed from 20 to 9
                 page,
             },
             { preserveScroll: true }
@@ -140,69 +159,78 @@ export default function MyInvoicesPage({ filters, invoices }: Props) {
                         {invoices.data.length === 0 ? (
                             <p className="text-sm text-muted-foreground">Brak faktur dla wybranych filtrów.</p>
                         ) : (
-                            <div className="grid gap-2">
+                            <div className="grid gap-3 md:grid-cols-3">
                                 {invoices.data.map((invoice) => (
-                                    <div key={invoice.id} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white/50 p-3 text-sm md:grid-cols-8 md:gap-4">
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Numer KSeF</div>
-                                            <div className="font-mono text-xs font-semibold">{invoice.ksef_id}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Numer faktury</div>
-                                            <div className="font-medium">{invoice.number ?? '-'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Sprzedawca</div>
-                                            <div className="truncate">{invoice.seller_name ?? '-'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">NIP sprzedawcy</div>
-                                            <div className="font-mono text-xs">{invoice.seller_nip ?? '-'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Nabywca</div>
-                                            <div className="truncate">{invoice.buyer_name ?? '-'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Netto</div>
-                                            <div className="font-semibold text-green-700">{toAmount(invoice.total_net).toLocaleString()} {invoice.currency ?? 'PLN'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">VAT</div>
-                                            <div className="font-semibold text-blue-700">{toAmount(invoice.total_vat).toLocaleString()} {invoice.currency ?? 'PLN'}</div>
-                                        </div>
-                                        <div>
-                                            <div className="text-xs text-muted-foreground">Data</div>
-                                            <div className="text-xs">{invoice.issue_date ?? '-'}</div>
+                                    <div key={invoice.id} className="rounded-lg border border-slate-200 bg-gradient-to-r from-white/80 to-slate-50/50 p-4 transition-all hover:shadow-md hover:border-slate-300">
+                                        <div className="space-y-2.5">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-xs font-semibold text-slate-500">KSeF:</span>
+                                                    <span className="font-mono text-sm font-bold text-slate-900">{invoice.ksef_id}</span>
+                                                </div>
+                                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                                                    {invoice.number ?? '-'}
+                                                </Badge>
+                                            </div>
+                                            
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-muted-foreground font-medium">Sprzedawca</div>
+                                                <div className="text-sm font-semibold text-slate-900 truncate">{invoice.seller_name ?? '-'}</div>
+                                                <div className="text-xs text-slate-600 font-mono">{invoice.seller_nip ?? '-'}</div>
+                                            </div>
+
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-muted-foreground font-medium">Nabywca</div>
+                                                <div className="text-xs text-slate-700 truncate">{invoice.buyer_name ?? '-'}</div>
+                                            </div>
+                                            
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                <div>
+                                                    <span className="text-slate-600">Netto:</span>
+                                                    <div className="font-bold text-green-700">{toAmount(invoice.total_net).toLocaleString()} zł</div>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-600">VAT:</span>
+                                                    <div className="font-bold text-blue-700">{toAmount(invoice.total_vat).toLocaleString()} zł</div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-xs text-slate-600 border-t pt-2">
+                                                <span className="font-medium">Data:</span> {formatDate(invoice.issue_date)}
+                                            </div>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         )}
-
-                        {invoices.lastPage > 1 ? (
-                            <div className="mt-4 flex items-center justify-end gap-2">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={invoices.currentPage <= 1}
-                                    onClick={() => goToPage(invoices.currentPage - 1)}
-                                >
-                                    Poprzednia
-                                </Button>
-                                <span className="text-sm text-muted-foreground">
-                                    Strona {invoices.currentPage} / {invoices.lastPage}
-                                </span>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    disabled={invoices.currentPage >= invoices.lastPage}
-                                    onClick={() => goToPage(invoices.currentPage + 1)}
-                                >
-                                    Następna
-                                </Button>
+                        {invoices.lastPage > 1 && (
+                            <div className="mt-6 flex flex-col gap-3 items-center border-t pt-4">
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={invoices.currentPage <= 1}
+                                        onClick={() => goToPage(invoices.currentPage - 1)}
+                                    >
+                                        ← Poprzednia
+                                    </Button>
+                                    <span className="text-sm text-muted-foreground font-medium">
+                                        Strona {invoices.currentPage} / {invoices.lastPage}
+                                    </span>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={invoices.currentPage >= invoices.lastPage}
+                                        onClick={() => goToPage(invoices.currentPage + 1)}
+                                    >
+                                        Następna →
+                                    </Button>
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                    Wyświetlane: {(invoices.currentPage - 1) * invoices.perPage + 1}–{Math.min(invoices.currentPage * invoices.perPage, invoices.total)} z {invoices.total} faktur
+                                </div>
                             </div>
-                        ) : null}
+                        )}
                     </CardContent>
                 </Card>
             </div>

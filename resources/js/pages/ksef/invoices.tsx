@@ -1,4 +1,4 @@
-import { Head, router } from '@inertiajs/react';
+import { Head } from '@inertiajs/react';
 import {
     CheckCircle2,
     Download,
@@ -9,6 +9,8 @@ import {
     LogOut,
     Search,
     XCircle,
+    Eye,
+    ChevronRight,
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
@@ -39,28 +41,29 @@ type KsefStatus = {
     auth_method?: string;
 };
 
-type InvoiceMetadata = {
-    ksefNumber?: string;
-    invoiceNumber?: string;
-    invoicingDate?: string;
-    acquisitionDate?: string;
-    sellerName?: string;
-    sellerNip?: string;
-    buyerName?: string;
-    buyerNip?: string;
-    grossValue?: number;
-    netValue?: number;
-    vatValue?: number;
-    currency?: string;
-    invoiceType?: string;
-    formType?: string;
-    [key: string]: unknown;
+type DbInvoice = {
+    id: number;
+    ksef_id: string;
+    reference_number: string | null;
+    number: string | null;
+    issue_date: string | null;
+    invoicing_date: string | null;
+    seller_name: string | null;
+    seller_nip: string | null;
+    buyer_name: string | null;
+    buyer_nip: string | null;
+    total_gross: number | null;
+    total_net: number | null;
+    total_vat: number | null;
+    currency: string | null;
+    invoice_type: string | null;
 };
 
-type SearchResult = {
-    invoices: InvoiceMetadata[];
-    hasMore: boolean;
-    isTruncated: boolean;
+type PaginationState = {
+    currentPage: number;
+    lastPage: number;
+    perPage: number;
+    total: number;
 };
 
 type ParsedInvoicePreview = {
@@ -116,17 +119,46 @@ const parseInvoicePreview = (xml: string): ParsedInvoicePreview => {
     }
 };
 
+const formatDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '-';
+    try {
+        const date = new Date(dateStr);
+        if (Number.isNaN(date.getTime())) return '-';
+        return new Intl.DateTimeFormat('pl-PL', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        }).format(date);
+    } catch {
+        return '-';
+    }
+};
+
 export default function KsefInvoices({ status: initialStatus }: { status: KsefStatus }) {
     const [status, setStatus] = useState<KsefStatus>(initialStatus);
     const [loading, setLoading] = useState(false);
     const [authLoading, setAuthLoading] = useState(false);
-    const [invoices, setInvoices] = useState<InvoiceMetadata[]>([]);
-    const [searchResult, setSearchResult] = useState<SearchResult | null>(null);
+    const [invoices, setInvoices] = useState<DbInvoice[]>([]);
+    const [currentDBPage, setCurrentDBPage] = useState(1);
+    const pageSize = 9; // 3x3 grid
+    const totalDBPages = Math.ceil(invoices.length / pageSize);
+    const paginatedDBInvoices = invoices.slice(
+        (currentDBPage - 1) * pageSize,
+        currentDBPage * pageSize
+    );
+    const [pagination, setPagination] = useState<PaginationState>({
+        currentPage: 1,
+        lastPage: 1,
+        perPage: 20,
+        total: 0,
+    });
     const [error, setError] = useState<string | null>(null);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [xmlPreview, setXmlPreview] = useState<string | null>(null);
     const [previewKsef, setPreviewKsef] = useState<string | null>(null);
-    const [previewMeta, setPreviewMeta] = useState<InvoiceMetadata | null>(null);
+    const [previewMeta, setPreviewMeta] = useState<DbInvoice | null>(null);
     const [previewParsed, setPreviewParsed] = useState<ParsedInvoicePreview | null>(null);
 
     // Search form state
@@ -202,15 +234,15 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                 setSuccessMsg(data.message);
                 setStatus((s) => ({ ...s, authenticated: false }));
                 setInvoices([]);
-                setSearchResult(null);
+                setPagination({ currentPage: 1, lastPage: 1, perPage: 20, total: 0 });
             }
         } catch (e) {
             setError('Błąd rozłączania');
         }
     }, []);
 
-    const handleSearch = useCallback(
-        async (offset = 0) => {
+    const handleCheckInvoices = useCallback(
+        async (page = 1, offset = 0) => {
             clearMessages();
             setLoading(true);
             setPageOffset(offset);
@@ -222,12 +254,14 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                     subjectType,
                     pageOffset: offset,
                     pageSize: 50,
+                    page,
+                    perPage: pagination.perPage,
                 };
                 if (sellerNip) body.sellerNip = sellerNip;
                 if (ksefNumber) body.ksefNumber = ksefNumber;
                 if (invoiceNumber) body.invoiceNumber = invoiceNumber;
 
-                const res = await fetch('/ksef/invoices/search', {
+                const res = await fetch('/ksef/invoices/check', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -239,24 +273,31 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
 
                 const data = await res.json();
 
-                if (data.error) {
+                if (data.error || data.success === false) {
                     setError(data.error);
                 } else {
-                    setSearchResult(data);
-                    setInvoices(data.invoices || []);
-                    setSuccessMsg(`Znaleziono ${data.invoices?.length ?? 0} faktur`);
+                    setInvoices(data.data || []);
+                    setPagination({
+                        currentPage: data.currentPage ?? 1,
+                        lastPage: data.lastPage ?? 1,
+                        perPage: data.perPage ?? 20,
+                        total: data.total ?? 0,
+                    });
+                    const saved = data?.synced?.saved ?? 0;
+                    const fetched = data?.synced?.fetched ?? 0;
+                    setSuccessMsg(`Sprawdzono KSeF: pobrano ${fetched}, zapisano ${saved}.`);
                 }
             } catch (e) {
-                setError('Błąd wyszukiwania');
+                setError('Błąd pobierania faktur');
             } finally {
                 setLoading(false);
             }
         },
-        [authType, dateFrom, dateTo, subjectType, sellerNip, ksefNumber, invoiceNumber],
+        [authType, dateFrom, dateTo, subjectType, sellerNip, ksefNumber, invoiceNumber, pagination.perPage],
     );
 
-    const handlePreview = useCallback(async (invoice: InvoiceMetadata) => {
-        const ksefNum = invoice.ksefNumber;
+    const handlePreview = useCallback(async (invoice: DbInvoice) => {
+        const ksefNum = invoice.ksef_id;
         if (!ksefNum) return;
         try {
             const res = await fetch(`/ksef/invoices/${encodeURIComponent(ksefNum)}?type=${authType}`, {
@@ -402,7 +443,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                 {status.authenticated && (
                     <Card>
                         <CardHeader>
-                            <CardTitle className="text-base">Wyszukaj faktury</CardTitle>
+                            <CardTitle className="text-base">Sprawdź faktury i zapisz do bazy</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -468,7 +509,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                                 </div>
                                 <div className="flex items-end">
                                     <Button
-                                        onClick={() => handleSearch(0)}
+                                        onClick={() => handleCheckInvoices(1, 0)}
                                         disabled={loading}
                                         className="w-full"
                                     >
@@ -477,7 +518,7 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                                         ) : (
                                             <Search className="mr-2 h-4 w-4" />
                                         )}
-                                        Szukaj
+                                        Sprawdź faktury
                                     </Button>
                                 </div>
                             </div>
@@ -491,112 +532,131 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                         <CardHeader>
                             <div className="flex items-center justify-between">
                                 <CardTitle className="text-base">
-                                    Wyniki ({invoices.length} faktur)
+                                    Wyniki z bazy ({pagination.total} faktur)
                                 </CardTitle>
-                                {searchResult?.hasMore && (
-                                    <div className="flex gap-2">
-                                        {pageOffset > 0 && (
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => handleSearch(pageOffset - 1)}
-                                            >
-                                                Poprzednia
-                                            </Button>
-                                        )}
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => handleSearch(pageOffset + 1)}
-                                        >
-                                            Następna
-                                        </Button>
-                                    </div>
-                                )}
+                                <div className="text-xs text-muted-foreground">
+                                    Strona {pagination.currentPage} z {pagination.lastPage}
+                                </div>
                             </div>
                         </CardHeader>
                         <CardContent>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b text-left">
-                                            <th className="px-2 py-2 font-medium">Numer KSeF</th>
-                                            <th className="px-2 py-2 font-medium">Nr faktury</th>
-                                            <th className="px-2 py-2 font-medium">Data</th>
-                                            <th className="px-2 py-2 font-medium">Sprzedawca</th>
-                                            <th className="px-2 py-2 font-medium">NIP sprzedawcy</th>
-                                            <th className="px-2 py-2 font-medium">Kwota brutto</th>
-                                            <th className="px-2 py-2 font-medium">Waluta</th>
-                                            <th className="px-2 py-2 font-medium">Typ</th>
-                                            <th className="px-2 py-2 font-medium">Akcje</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {invoices.map((inv, i) => (
-                                            <tr
-                                                key={inv.ksefNumber || i}
-                                                className="border-b hover:bg-muted/50"
-                                            >
-                                                <td className="max-w-[200px] truncate px-2 py-2 font-mono text-xs">
-                                                    {inv.ksefNumber || '-'}
-                                                </td>
-                                                <td className="px-2 py-2">
-                                                    {inv.invoiceNumber || '-'}
-                                                </td>
-                                                <td className="px-2 py-2 whitespace-nowrap">
-                                                    {inv.invoicingDate
-                                                        ? new Date(inv.invoicingDate).toLocaleDateString('pl-PL')
-                                                        : '-'}
-                                                </td>
-                                                <td className="max-w-[200px] truncate px-2 py-2">
-                                                    {inv.sellerName || '-'}
-                                                </td>
-                                                <td className="px-2 py-2 font-mono text-xs">
-                                                    {inv.sellerNip || '-'}
-                                                </td>
-                                                <td className="px-2 py-2 text-right whitespace-nowrap">
-                                                    {inv.grossValue != null
-                                                        ? inv.grossValue.toLocaleString('pl-PL', {
-                                                              minimumFractionDigits: 2,
-                                                          })
-                                                        : '-'}
-                                                </td>
-                                                <td className="px-2 py-2">{inv.currency || 'PLN'}</td>
-                                                <td className="px-2 py-2">
-                                                    <Badge variant="outline" className="text-xs">
-                                                        {inv.invoiceType || inv.formType || '-'}
-                                                    </Badge>
-                                                </td>
-                                                <td className="px-2 py-2">
-                                                    <div className="flex gap-1">
-                                                        {inv.ksefNumber && (
-                                                            <>
-                                                                <Button
-                                                                    variant="ghost"
-                                                                    size="sm"
-                                                                    onClick={() => handlePreview(inv)}
-                                                                    title="Podgląd XML"
-                                                                >
-                                                                    <FileText className="h-4 w-4" />
-                                                                </Button>
-                                                                <Button
-                                                                    variant="ghost"
-                                                                    size="sm"
-                                                                    onClick={() =>
-                                                                        handleDownload(inv.ksefNumber!)
-                                                                    }
-                                                                    title="Pobierz XML"
-                                                                >
-                                                                    <Download className="h-4 w-4" />
-                                                                </Button>
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                            <div className="grid gap-3 md:grid-cols-3">
+                                {paginatedDBInvoices.map((inv, i) => (
+                                    <div key={inv.ksef_id || i} className="rounded-lg border border-slate-200 bg-gradient-to-r from-white/80 to-slate-50/50 p-4 transition-all hover:shadow-md hover:border-slate-300">
+                                        <div className="space-y-2.5">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <div className="flex items-center gap-1">
+                                                    <span className="text-xs font-semibold text-slate-500">KSeF:</span>
+                                                    <span className="font-mono text-sm font-bold text-slate-900">{inv.ksef_id || '-'}</span>
+                                                </div>
+                                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">
+                                                    {inv.invoice_type || '-'}
+                                                </Badge>
+                                            </div>
+                                            
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-muted-foreground font-medium">Numer faktury</div>
+                                                <div className="text-sm font-semibold text-slate-900">{inv.number || '-'}</div>
+                                            </div>
+
+                                            <div className="space-y-1">
+                                                <div className="text-xs text-muted-foreground font-medium">Sprzedawca</div>
+                                                <div className="text-sm font-semibold text-slate-900 truncate">{inv.seller_name || '-'}</div>
+                                                <div className="text-xs text-slate-600 font-mono">{inv.seller_nip || '-'}</div>
+                                            </div>
+                                            
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                <div>
+                                                    <span className="text-slate-600">Brutto:</span>
+                                                    <div className="font-bold text-green-700">{inv.total_gross != null ? inv.total_gross.toLocaleString('pl-PL', { minimumFractionDigits: 2 }) : '-'} {inv.currency || 'PLN'}</div>
+                                                </div>
+                                                <div>
+                                                    <span className="text-slate-600">Netto:</span>
+                                                    <div className="font-bold text-blue-700">{inv.total_net != null ? inv.total_net.toLocaleString('pl-PL', { minimumFractionDigits: 2 }) : '-'} {inv.currency || 'PLN'}</div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-xs text-slate-600 border-t pt-2">
+                                                <span className="font-medium">Data:</span> {formatDate(inv.invoicing_date)}
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2 pt-2">
+                                                {inv.ksef_id && (
+                                                    <>
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="border-blue-200 text-blue-700 hover:bg-blue-50 hover:text-blue-800"
+                                                            onClick={() => handlePreview(inv)}
+                                                            title="Podgląd XML"
+                                                        >
+                                                            <Eye className="mr-1 h-3.5 w-3.5" />
+                                                            <span className="text-xs">Podgląd</span>
+                                                        </Button>
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="border-teal-200 text-teal-700 hover:bg-teal-50 hover:text-teal-800"
+                                                            onClick={() => handleDownload(inv.ksef_id)}
+                                                            title="Pobierz XML"
+                                                        >
+                                                            <Download className="mr-1 h-3.5 w-3.5" />
+                                                            <span className="text-xs">Pobierz</span>
+                                                        </Button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Client-side Pagination for DB Results */}
+                            {invoices.length > 0 && totalDBPages > 1 && (
+                                <div className="mt-6 flex flex-col gap-3 items-center border-t pt-4">
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={currentDBPage <= 1}
+                                            onClick={() => setCurrentDBPage(p => Math.max(1, p - 1))}
+                                        >
+                                            ← Poprzednia
+                                        </Button>
+                                        <span className="text-sm text-muted-foreground font-medium">
+                                            Strona {currentDBPage} / {totalDBPages}
+                                        </span>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={currentDBPage >= totalDBPages}
+                                            onClick={() => setCurrentDBPage(p => Math.min(totalDBPages, p + 1))}
+                                        >
+                                            Następna →
+                                        </Button>
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                        Wyświetlane: {(currentDBPage - 1) * pageSize + 1}–{Math.min(currentDBPage * pageSize, invoices.length)} z {invoices.length} faktur
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mt-4 flex items-center justify-end gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={loading || pagination.currentPage <= 1}
+                                    onClick={() => handleCheckInvoices(pagination.currentPage - 1, pageOffset)}
+                                >
+                                    Poprzednia
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={loading || pagination.currentPage >= pagination.lastPage}
+                                    onClick={() => handleCheckInvoices(pagination.currentPage + 1, pageOffset)}
+                                >
+                                    Następna
+                                </Button>
                             </div>
                         </CardContent>
                     </Card>
@@ -639,31 +699,31 @@ export default function KsefInvoices({ status: initialStatus }: { status: KsefSt
                                 <div className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-4 md:grid-cols-2">
                                     <div>
                                         <div className="text-xs text-muted-foreground">Sprzedawca</div>
-                                        <div className="font-semibold">{previewMeta.sellerName ?? previewParsed.sellerName}</div>
-                                        <div className="font-mono text-xs">NIP: {previewMeta.sellerNip ?? previewParsed.sellerNip}</div>
+                                        <div className="font-semibold">{previewMeta.seller_name ?? previewParsed.sellerName}</div>
+                                        <div className="font-mono text-xs">NIP: {previewMeta.seller_nip ?? previewParsed.sellerNip}</div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-muted-foreground">Nabywca</div>
-                                        <div className="font-semibold">{previewMeta.buyerName ?? previewParsed.buyerName}</div>
-                                        <div className="font-mono text-xs">NIP: {previewMeta.buyerNip ?? previewParsed.buyerNip}</div>
+                                        <div className="font-semibold">{previewMeta.buyer_name ?? previewParsed.buyerName}</div>
+                                        <div className="font-mono text-xs">NIP: {previewMeta.buyer_nip ?? previewParsed.buyerNip}</div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-muted-foreground">Numer faktury</div>
-                                        <div>{previewMeta.invoiceNumber ?? '-'}</div>
-                                        <div className="text-xs text-muted-foreground">Data: {previewMeta.invoicingDate ?? previewParsed.issueDate}</div>
+                                        <div>{previewMeta.number ?? '-'}</div>
+                                        <div className="text-xs text-muted-foreground">Data: {previewMeta.invoicing_date ?? previewParsed.issueDate}</div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-muted-foreground">Płatność</div>
                                         <div>Termin: {previewParsed.paymentDueDate}</div>
-                                        <div className="text-xs text-muted-foreground">Typ: {previewMeta.invoiceType ?? previewMeta.formType ?? '-'}</div>
+                                        <div className="text-xs text-muted-foreground">Typ: {previewMeta.invoice_type ?? '-'}</div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-muted-foreground">Netto</div>
-                                        <div className="font-semibold">{previewMeta.netValue ?? previewParsed.net} {previewMeta.currency ?? 'PLN'}</div>
+                                        <div className="font-semibold">{previewMeta.total_net ?? previewParsed.net} {previewMeta.currency ?? 'PLN'}</div>
                                     </div>
                                     <div>
                                         <div className="text-xs text-muted-foreground">VAT / Brutto</div>
-                                        <div className="font-semibold">{previewMeta.vatValue ?? previewParsed.vat} / {previewMeta.grossValue ?? previewParsed.gross} {previewMeta.currency ?? 'PLN'}</div>
+                                        <div className="font-semibold">{previewMeta.total_vat ?? previewParsed.vat} / {previewMeta.total_gross ?? previewParsed.gross} {previewMeta.currency ?? 'PLN'}</div>
                                     </div>
                                 </div>
                             )}

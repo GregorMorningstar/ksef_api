@@ -12,7 +12,7 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { dashboard } from '@/routes';
-import { FileText, DollarSign, CheckCircle2, LogIn, LogOut, KeyRound, Loader2, Wifi, WifiOff, ShieldCheck, Download, Settings2, Search, Trash2 } from 'lucide-react';
+import { FileText, DollarSign, CheckCircle2, LogIn, LogOut, KeyRound, Loader2, Wifi, WifiOff, ShieldCheck, Download, Settings2, Search, Trash2, Eye, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -27,11 +27,17 @@ type KsefStatus = {
 type InvoiceMetadata = {
     ksefNumber?: string;
     ksefReferenceNumber?: string;
+    ksef_id?: string;
     invoiceNumber?: string;
+    number?: string;
     invoicingDate?: string;
+    invoicing_date?: string;
     acquisitionDate?: string;
+    acquisition_date?: string;
     sellerName?: string;
+    seller_name?: string;
     sellerNip?: string;
+    seller_nip?: string;
     buyerName?: string;
     buyerNip?: string;
     grossValue?: number;
@@ -40,8 +46,12 @@ type InvoiceMetadata = {
     totalGrossAmount?: number;
     totalNetAmount?: number;
     totalVatAmount?: number;
+    total_gross?: number;
+    total_net?: number;
+    total_vat?: number;
     currency?: string;
     invoiceType?: string;
+    invoice_type?: string;
     formType?: string;
     status?: string;
 };
@@ -90,6 +100,23 @@ const getStatusLabel = (status: string) => {
         case 'pending': return 'Oczekująca';
         case 'rejected': return 'Odrzucona';
         default: return status;
+    }
+};
+
+const formatDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '-';
+    try {
+        const date = new Date(dateStr);
+        if (Number.isNaN(date.getTime())) return '-';
+        return new Intl.DateTimeFormat('pl-PL', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        }).format(date);
+    } catch {
+        return '-';
     }
 };
 
@@ -181,12 +208,22 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
     });
     const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0]);
     const [subjectType, setSubjectType] = useState<'Subject1' | 'Subject2' | 'Subject3' | 'SubjectAuthorized'>('Subject1');
+    const [newInvoiceLoading, setNewInvoiceLoading] = useState(false);
+    const [lastNewCount, setLastNewCount] = useState<number | null>(null);
+    const [currentInvoicePage, setCurrentInvoicePage] = useState(1);
     const hasFetchedForCurrentSession = useRef(initialStatus.authenticated);
+
+    const itemsPerPage = 9;
+    const totalPages = Math.ceil(invoices.length / itemsPerPage);
+    const paginatedInvoices = invoices.slice(
+        (currentInvoicePage - 1) * itemsPerPage,
+        currentInvoicePage * itemsPerPage
+    );
 
     const stats = {
         totalInvoices: invoices.length,
-        totalAmount: invoices.reduce((sum, inv) => sum + toNumber(inv.netValue ?? inv.totalNetAmount), 0),
-        totalVat: invoices.reduce((sum, inv) => sum + toNumber(inv.vatValue ?? inv.totalVatAmount), 0),
+        totalAmount: invoices.reduce((sum, inv) => sum + toNumber(inv.total_net ?? inv.netValue ?? inv.totalNetAmount), 0),
+        totalVat: invoices.reduce((sum, inv) => sum + toNumber(inv.total_vat ?? inv.vatValue ?? inv.totalVatAmount), 0),
         acceptedCount: invoices.filter((inv) => String(inv.status ?? '').toLowerCase() === 'accepted').length,
     };
 
@@ -199,7 +236,7 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
         setInvoiceLoading(true);
         setError(null);
         try {
-            const res = await fetch('/ksef/invoices/search', {
+            const res = await fetch('/ksef/invoices/check', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -222,7 +259,11 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
                 return;
             }
 
-            setInvoices(Array.isArray(data.invoices) ? data.invoices : []);
+            setInvoices(Array.isArray(data.data) ? data.data : []);
+            setCurrentInvoicePage(1); // Reset to first page
+            if (data.synced) {
+                setSuccessMsg(`Sprawdzono KSeF: pobrano ${data.synced.fetched ?? 0}, zapisano ${data.synced.saved ?? 0}.`);
+            }
         } catch {
             setError('Nie udało się pobrać faktur z KSeF');
             setInvoices([]);
@@ -230,6 +271,47 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
             setInvoiceLoading(false);
         }
     }, [authType, dateFrom, dateTo, subjectType, status.authenticated]);
+
+    const handleSyncNewInvoices = useCallback(async () => {
+        if (!status.authenticated) {
+            setError('Musisz być połączony z KSeF, aby zsynchronizować nowe faktury.');
+            return;
+        }
+
+        setNewInvoiceLoading(true);
+        setError(null);
+        setLastNewCount(null);
+        try {
+            const res = await fetch('/ksef/invoices/check-new', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrf(),
+                },
+                body: JSON.stringify({
+                    type: authType,
+                }),
+            });
+
+            const data = await res.json();
+            if (data.error) {
+                setError(data.error);
+                return;
+            }
+
+            if (data.success) {
+                const count = data.newCount ?? data.synced?.saved ?? 0;
+                setLastNewCount(count);
+                setSuccessMsg(`Nowe faktury pobrane: zapisano ${count}.`);
+                // Refresh invoice list with full check to show new ones
+                void fetchInvoices();
+            }
+        } catch {
+            setError('Nie udało się pobrać nowych faktur z KSeF');
+        } finally {
+            setNewInvoiceLoading(false);
+        }
+    }, [authType, status.authenticated, fetchInvoices]);
 
     const keepSessionAlive = useCallback(async () => {
         if (!status.authenticated) {
@@ -262,6 +344,34 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
             // keep-alive is best effort
         }
     }, [authType, status.authenticated]);
+
+    // Refresh session time on page reload
+    useEffect(() => {
+        if (!status.authenticated) {
+            return;
+        }
+
+        const refreshSessionTime = async () => {
+            try {
+                const res = await fetch('/ksef/status', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrf(),
+                    },
+                });
+
+                const data = await res.json();
+                if (data.authenticated && data.session_valid_until) {
+                    setSessionValidUntil(data.session_valid_until);
+                }
+            } catch {
+                // Status check failed, but continue anyway
+            }
+        };
+
+        void refreshSessionTime();
+    }, []); // Run once on mount
 
     useEffect(() => {
         if (!sessionValidUntil) {
@@ -581,13 +691,14 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
                         <div className="space-y-1.5">
                             <CardTitle className="flex items-center gap-2">
                                 <ShieldCheck className="h-5 w-5 text-teal-700" />
-                                Zarządzanie certyfikatami
+                                <span>Zarządzanie certyfikatami <span className="ml-2 rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">KSeF</span></span>
                             </CardTitle>
                             <p className="text-sm text-muted-foreground">
-                                Podgląd aktywnych certyfikatów użytkownika i szybkie przejście do wymiany plików.
+                                Tutaj możesz zarządzać swoimi certyfikatami do podpisu i połączenia z KSeF.<br />
+                                <span className="text-xs text-blue-700">Faktury są pobierane i wyszukiwane bezpośrednio w KSeF.</span>
                             </p>
                         </div>
-                        <Button asChild className="bg-teal-700 hover:bg-teal-800">
+                        <Button asChild className="bg-teal-700 hover:bg-teal-800" title="Przejdź do panelu certyfikatów">
                             <Link href="/ksef/setup">
                                 <Settings2 className="mr-2 h-4 w-4" />
                                 Otwórz panel certyfikatów
@@ -615,7 +726,7 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Search className="h-4 w-4" />
-                            Filtry faktur KSeF
+                            <span>Filtry faktur <span className="ml-1 rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">KSeF</span></span>
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
@@ -642,12 +753,22 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div className="flex items-end">
-                                <Button onClick={() => void fetchInvoices()} disabled={!status.authenticated || invoiceLoading} className="w-full bg-teal-700 hover:bg-teal-800">
+                            <div className="flex items-end gap-2">
+                                <Button onClick={() => void fetchInvoices()} disabled={!status.authenticated || invoiceLoading} className="w-full bg-teal-700 hover:bg-teal-800" title="Wyszukaj i zapisz faktury z KSeF do bazy">
                                     {invoiceLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-                                    Szukaj
+                                    Sprawdź i zapisz
                                 </Button>
+                                <Button onClick={() => void handleSyncNewInvoices()} disabled={!status.authenticated || newInvoiceLoading} variant="outline" className="border-blue-200 text-blue-700 hover:bg-blue-50 hover:text-blue-800 font-semibold" title="Pobierz tylko nowe faktury z KSeF (od ostatniej synchronizacji)">
+                                    {newInvoiceLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                                    Wyszukaj tylko nowe
+                                </Button>
+                                {lastNewCount !== null && (
+                                    <span className="ml-2 text-xs text-blue-700">Pobrano: <b>{lastNewCount}</b></span>
+                                )}
                             </div>
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">
+                            <span>Wszystkie faktury są wyszukiwane i pobierane bezpośrednio z KSeF, a następnie zapisywane w bazie danych.</span>
                         </div>
                     </CardContent>
                 </Card>
@@ -713,41 +834,107 @@ export default function Dashboard({ ksefStatus: initialStatus, certificatePanel 
                         ) : invoices.length === 0 ? (
                             <div className="text-sm text-muted-foreground">Brak faktur dla wybranych filtrów.</div>
                         ) : (
-                            <div className="grid gap-2">
-                                {invoices.map((invoice, index) => (
-                                    <div key={`${invoice.ksefNumber ?? invoice.ksefReferenceNumber ?? 'inv'}-${index}`} className="grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-white/50 p-3 text-sm md:grid-cols-7 md:gap-4">
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">Numer KSeF</div>
-                                        <div className="font-mono text-xs font-semibold">{invoice.ksefNumber ?? invoice.ksefReferenceNumber ?? '-'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">Sprzedawca</div>
-                                        <div className="truncate font-medium">{invoice.sellerName ?? '-'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">NIP</div>
-                                        <div className="font-mono text-xs">{invoice.sellerNip ?? '-'}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">Netto</div>
-                                        <div className="font-semibold text-green-700">{toNumber(invoice.netValue ?? invoice.totalNetAmount).toLocaleString()} zł</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">VAT</div>
-                                        <div className="font-semibold text-blue-700">{toNumber(invoice.vatValue ?? invoice.totalVatAmount).toLocaleString()} zł</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">Rodzaj</div>
-                                        <Badge className="bg-slate-100 text-slate-800 hover:bg-slate-100">
-                                            {invoice.invoiceType ?? invoice.formType ?? '-'}
-                                        </Badge>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs text-muted-foreground">Data</div>
-                                        <div className="text-xs text-muted-foreground">{invoice.invoicingDate ?? invoice.acquisitionDate ?? '-'}</div>
-                                    </div>
+                            <div className="flex flex-col gap-3">
+                                {paginatedInvoices.map((invoice, index) => {
+                                    const ksefId = invoice.ksef_id ?? invoice.ksefNumber ?? invoice.ksefReferenceNumber ?? '-';
+                                    const invoiceDate = invoice.invoicing_date ?? invoice.invoicingDate ?? invoice.acquisition_date ?? invoice.acquisitionDate;
+                                    return (
+                                        <div key={`${ksefId}-${index}`} className="rounded-lg border border-slate-200 bg-gradient-to-r from-white/80 to-slate-50/50 p-4 transition-all hover:shadow-md hover:border-slate-300">
+                                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                                <div className="flex-1 space-y-2">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="text-xs font-semibold text-slate-500">KSeF:</span>
+                                                            <span className="font-mono text-sm font-bold text-slate-900">{ksefId}</span>
+                                                        </div>
+                                                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                                                            {invoice.invoice_type ?? invoice.invoiceType ?? invoice.formType ?? 'N/A'}
+                                                        </Badge>
+                                                    </div>
+                                                    
+                                                    <div className="grid gap-2 md:grid-cols-2">
+                                                        <div>
+                                                            <div className="text-xs text-muted-foreground font-medium">Sprzedawca</div>
+                                                            <div className="text-sm font-semibold text-slate-900">{invoice.seller_name ?? invoice.sellerName ?? '-'}</div>
+                                                            <div className="text-xs text-slate-600 font-mono">{invoice.seller_nip ?? invoice.sellerNip ?? '-'}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-xs text-muted-foreground font-medium">Kwoty</div>
+                                                            <div className="flex gap-3 text-sm">
+                                                                <div>
+                                                                    <span className="text-slate-600">Netto: </span>
+                                                                    <span className="font-bold text-green-700">{toNumber(invoice.total_net ?? invoice.netValue ?? invoice.totalNetAmount).toLocaleString('pl-PL')} zł</span>
+                                                                </div>
+                                                                <div>
+                                                                    <span className="text-slate-600">VAT: </span>
+                                                                    <span className="font-bold text-blue-700">{toNumber(invoice.total_vat ?? invoice.vatValue ?? invoice.totalVatAmount).toLocaleString('pl-PL')} zł</span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div className="text-xs text-slate-600">
+                                                        <span className="font-medium">Data faktury:</span> {formatDate(invoiceDate)}
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="flex flex-wrap gap-2 md:flex-col md:whitespace-nowrap">
+                                                    <Button 
+                                                        variant="outline" 
+                                                        size="sm" 
+                                                        className="border-blue-200 text-blue-700 hover:bg-blue-50 hover:text-blue-800"
+                                                        title="Podgląd XML"
+                                                    >
+                                                        <Eye className="mr-1 h-3.5 w-3.5" />
+                                                        <span className="text-xs">Podgląd</span>
+                                                    </Button>
+                                                    <Button 
+                                                        asChild
+                                                        variant="outline" 
+                                                        size="sm" 
+                                                        className="border-teal-200 text-teal-700 hover:bg-teal-50 hover:text-teal-800"
+                                                        title="Przejdź do szczegółów faktury"
+                                                    >
+                                                        <Link href={`/ksef/invoices?id=${ksefId}`}>
+                                                            <span className="text-xs">Szczegóły</span>
+                                                            <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                                                        </Link>
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Pagination */}
+                        {invoices.length > 0 && totalPages > 1 && (
+                            <div className="mt-6 flex flex-col gap-3 items-center border-t pt-4">
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={currentInvoicePage <= 1}
+                                        onClick={() => setCurrentInvoicePage(p => Math.max(1, p - 1))}
+                                    >
+                                        ← Poprzednia
+                                    </Button>
+                                    <span className="text-sm text-muted-foreground font-medium">
+                                        Strona {currentInvoicePage} / {totalPages}
+                                    </span>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={currentInvoicePage >= totalPages}
+                                        onClick={() => setCurrentInvoicePage(p => Math.min(totalPages, p + 1))}
+                                    >
+                                        Następna →
+                                    </Button>
                                 </div>
-                                ))}
+                                <div className="text-xs text-slate-500">
+                                    Wyświetlane: {(currentInvoicePage - 1) * itemsPerPage + 1}–{Math.min(currentInvoicePage * itemsPerPage, invoices.length)} z {invoices.length} faktur
+                                </div>
                             </div>
                         )}
                     </CardContent>
